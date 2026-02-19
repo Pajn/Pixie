@@ -1,6 +1,7 @@
 //! Pixie - macOS Window Focusing Tool
 
 mod accessibility;
+mod config;
 mod error;
 mod hotkey;
 mod leader_mode;
@@ -162,8 +163,30 @@ fn handle_command(cmd: Commands, window_manager: &WindowManager) -> Result<()> {
 }
 
 fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> {
+    let config = config::load();
+
+    if config.autostart && !config::is_autostart_enabled() {
+        if let Err(e) = config::set_autostart(true) {
+            eprintln!("Warning: Failed to enable autostart: {}", e);
+        }
+    } else if !config.autostart && config::is_autostart_enabled() {
+        if let Err(e) = config::set_autostart(false) {
+            eprintln!("Warning: Failed to disable autostart: {}", e);
+        }
+    }
+
+    let leader = config::parse_leader_key(&config.leader_key).unwrap_or_else(|_| {
+        (
+            Some(global_hotkey::hotkey::Modifiers::SUPER | global_hotkey::hotkey::Modifiers::SHIFT),
+            global_hotkey::hotkey::Code::KeyA,
+        )
+    });
+
     println!("🧚 Pixie started");
-    println!("  ⌘⇧A - Leader key (then press a letter to focus, or Shift+letter to register)");
+    println!(
+        "  {} - Leader key (then press a letter to focus, or Shift+letter to register)",
+        config.leader_key
+    );
 
     let windows = window_manager.get_all_saved_windows();
     if windows.is_empty() {
@@ -182,7 +205,8 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
     .map_err(|e| PixieError::Config(format!("Failed to set Ctrl+C handler: {}", e)))?;
 
     let leader_mode_controller = Arc::new(LeaderModeController::new()?);
-    let hotkey_manager = hotkey::HotkeyManager::new()?;
+    let hotkey_config = hotkey::HotkeyConfig { leader };
+    let hotkey_manager = hotkey::HotkeyManager::with_config(hotkey_config)?;
     let leader_id = hotkey_manager.leader_id;
     let letter_hotkeys = hotkey_manager.letter_hotkeys;
 
