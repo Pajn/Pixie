@@ -1,0 +1,47 @@
+[package]
+name = "pixie"
+version = "0.1.0"
+edition = "2021"
+description = "macOS window focusing tool with global shortcuts"
+authors = ["Emma"]
+license = "MIT"
+
+[dependencies]
+# Global hotkey support
+global-hotkey = "0.7"
+
+# macOS Accessibility API (uses core-foundation 0.9)
+accessibility = "0.1"
+accessibility-sys = "0.1"
+
+# macOS core frameworks - use 0.9 to match accessibility crate
+core-graphics = "0.23"
+core-foundation = "0.9"
+core-foundation-sys = "0.8"
+cocoa = "0.25"
+objc = "0.2"
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+
+# Serialization for persistence
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# App directories for config storage
+dirs = "6"
+
+# Ctrl+C handling for headless mode
+ctrlc = "3"
+
+[profile.release]
+opt-level = 2
+lto = true
+strip = true

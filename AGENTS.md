@@ -1,0 +1,22 @@
+# AGENTS
+
+## Project Overview
+- Pixie is a macOS window focus tool written in Rust.
+- Main entrypoint: `src/main.rs`.
+- Accessibility/window logic: `src/accessibility.rs` and `src/window.rs`.
+
+## Development Commands
+- Run tests: `cargo test`
+- Run app locally: `cargo run`
+- Build release binary: `cargo build --release`
+
+## App Bundle + Signing
+- Build/sign via Just:
+  - Ad-hoc signing (default): `just signed-app`
+  - Explicit identity: `just signed-app identity="Developer ID Application: Your Name (TEAMID)"`
+- Output bundle: `dist/Pixie.app`
+
+## Implementation Notes
+- Keep changes minimal and focused.
+- Preserve existing CLI behavior unless explicitly requested.
+- If changing Accessibility behavior, verify with runtime testing on macOS.
