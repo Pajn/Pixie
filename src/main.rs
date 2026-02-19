@@ -3,7 +3,9 @@
 mod accessibility;
 mod error;
 mod hotkey;
+mod leader_mode;
 mod menu_bar;
+mod notification;
 mod window;
 
 use clap::{Parser, Subcommand};
@@ -11,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use error::{PixieError, Result};
+use leader_mode::{LeaderModeController, LeaderModeEvent};
 use window::WindowManager;
 
 /// Pixie - macOS Window Focusing Tool
@@ -28,14 +31,23 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Register the currently focused window
-    Register,
-    /// Focus the saved window
-    Focus,
-    /// Show information about the saved window
+    /// Register the currently focused window to a slot
+    Register {
+        /// Slot letter (a-z)
+        slot: char,
+    },
+    /// Focus the window at a specific slot
+    Focus {
+        /// Slot letter (a-z)
+        slot: char,
+    },
+    /// Show all saved windows
     Show,
-    /// Clear the saved window
-    Clear,
+    /// Clear saved window(s)
+    Clear {
+        /// Slot letter (a-z), or omit to clear all
+        slot: Option<char>,
+    },
 }
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -95,28 +107,55 @@ fn main() -> Result<()> {
 
 fn handle_command(cmd: Commands, window_manager: &WindowManager) -> Result<()> {
     match cmd {
-        Commands::Register => {
-            let window = window_manager.register_current_window()?;
-            println!("✓ Registered window: {}", window.display_string());
+        Commands::Register { slot } => {
+            let slot = slot.to_ascii_lowercase();
+            if !slot.is_ascii_lowercase() {
+                return Err(PixieError::Config(format!(
+                    "Slot must be a letter a-z, got '{}'",
+                    slot
+                )));
+            }
+            let (_, window) = window_manager.register_current_window(slot)?;
+            let display = window.display_string();
+            notification::notify(
+                "Pixie",
+                &format!("Registered to [{}]: {}", slot, window.app_name),
+            );
+            println!("✓ Registered to slot '{}': {}", slot, display);
         }
-        Commands::Focus => {
-            let window = window_manager.focus_saved_window()?;
-            println!("✓ Focused window: {}", window.display_string());
+        Commands::Focus { slot } => {
+            let slot = slot.to_ascii_lowercase();
+            let window = window_manager.focus_saved_window(slot)?;
+            notification::notify("Pixie", &format!("Focused [{}]: {}", slot, window.app_name));
+            println!("✓ Focused slot '{}': {}", slot, window.display_string());
         }
-        Commands::Show => match window_manager.get_saved_window() {
-            Some(window) => {
-                println!("Saved window: {}", window.display_string());
-                println!("  PID: {}", window.pid);
-                println!("  Window ID: {}", window.window_id);
+        Commands::Show => {
+            let windows = window_manager.get_all_saved_windows();
+            if windows.is_empty() {
+                println!("No windows saved. Use 'pixie register <slot>' to save one.");
+            } else {
+                println!("Saved windows:");
+                for (slot, window) in windows {
+                    println!("  [{}] {}", slot, window.display_string());
+                }
+            }
+        }
+        Commands::Clear { slot } => match slot {
+            Some(s) => {
+                let s = s.to_ascii_lowercase();
+                if window_manager.clear_slot(s)? {
+                    notification::notify("Pixie", &format!("Cleared [{}]", s));
+                    println!("✓ Cleared slot '{}'", s);
+                } else {
+                    println!("Slot '{}' was empty", s);
+                }
             }
             None => {
-                println!("No window saved. Use 'pixie register' to save one.");
+                window_manager.clear_all_windows()?;
+                notification::notify("Pixie", "Cleared all slots");
+                println!("✓ Cleared all saved windows");
             }
         },
-        Commands::Clear => {
-            window_manager.clear_saved_window()?;
-            println!("✓ Cleared saved window");
-        }
     }
 
     Ok(())
@@ -124,11 +163,16 @@ fn handle_command(cmd: Commands, window_manager: &WindowManager) -> Result<()> {
 
 fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> {
     println!("🧚 Pixie started");
-    println!("  ⌘⇧R - Register current window");
-    println!("  ⌘⇧A - Focus saved window");
+    println!("  ⌘⇧A - Leader key (then press a letter to focus, or Shift+letter to register)");
 
-    if let Some(window) = window_manager.get_saved_window() {
-        println!("  Saved: {}", window.display_string());
+    let windows = window_manager.get_all_saved_windows();
+    if windows.is_empty() {
+        println!("  No windows saved.");
+    } else {
+        println!("  Saved windows:");
+        for (slot, window) in windows {
+            println!("    [{}] {}", slot, window.display_string());
+        }
     }
 
     ctrlc::set_handler(|| {
@@ -137,12 +181,14 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
     })
     .map_err(|e| PixieError::Config(format!("Failed to set Ctrl+C handler: {}", e)))?;
 
+    let leader_mode_controller = Arc::new(LeaderModeController::new()?);
     let hotkey_manager = hotkey::HotkeyManager::new()?;
-    let register_id = hotkey_manager.register_id;
-    let focus_id = hotkey_manager.focus_id;
+    let leader_id = hotkey_manager.leader_id;
 
     let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
-    let wm_clone = Arc::clone(&window_manager);
+    let controller_for_hotkey = Arc::clone(&leader_mode_controller);
+    let wm_for_events = Arc::clone(&window_manager);
+    let event_receiver = leader_mode_controller.events();
 
     std::thread::spawn(move || loop {
         if !RUNNING.load(Ordering::SeqCst) {
@@ -150,17 +196,41 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
         }
 
         if let Ok(event) = receiver.try_recv() {
-            if event.state == global_hotkey::HotKeyState::Pressed {
-                if event.id == register_id {
-                    match wm_clone.register_current_window() {
-                        Ok(window) => println!("✓ Registered: {}", window.display_string()),
+            if event.state == global_hotkey::HotKeyState::Pressed && event.id == leader_id {
+                controller_for_hotkey.enter_listening_mode();
+                notification::notify("Pixie", "Listening...");
+                println!("Listening...");
+            }
+        }
+
+        if let Ok(event) = event_receiver.try_recv() {
+            match event {
+                LeaderModeEvent::RegisterSlot(c) => {
+                    let slot = c.to_ascii_lowercase();
+                    match wm_for_events.register_current_window(slot) {
+                        Ok((_, window)) => {
+                            notification::notify(
+                                "Pixie",
+                                &format!("Registered to [{}]: {}", slot, window.app_name),
+                            );
+                            println!("✓ Registered to [{}]: {}", slot, window.display_string())
+                        }
                         Err(e) => eprintln!("✗ Failed: {}", e),
                     }
-                } else if event.id == focus_id {
-                    match wm_clone.focus_saved_window() {
-                        Ok(window) => println!("✓ Focused: {}", window.display_string()),
-                        Err(e) => eprintln!("✗ Failed: {}", e),
+                }
+                LeaderModeEvent::FocusSlot(c) => match wm_for_events.focus_saved_window(c) {
+                    Ok(window) => {
+                        notification::notify(
+                            "Pixie",
+                            &format!("Focused [{}]: {}", c, window.app_name),
+                        );
+                        println!("✓ Focused [{}]: {}", c, window.display_string())
                     }
+                    Err(e) => eprintln!("✗ Failed: {}", e),
+                },
+                LeaderModeEvent::Cancelled => {
+                    notification::notify("Pixie", "Cancelled");
+                    println!("Cancelled");
                 }
             }
         }

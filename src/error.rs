@@ -24,6 +24,9 @@ pub enum PixieError {
 
     #[error("Menu bar error: {0}")]
     MenuBar(String),
+
+    #[error("Leader mode error: {0}")]
+    LeaderMode(String),
 }
 
 impl From<global_hotkey::Error> for PixieError {

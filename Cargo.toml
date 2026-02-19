@@ -41,6 +41,12 @@ dirs = "6"
 # Ctrl+C handling for headless mode
 ctrlc = "3"
 
+# Keyboard event grabbing for leader mode
+rdev = { version = "0.5", features = ["unstable_grab"] }
+
+# Multi-producer multi-consumer channels for thread-safe messaging
+crossbeam = "0.8"
+
 [profile.release]
 opt-level = 2
 lto = true

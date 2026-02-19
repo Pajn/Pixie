@@ -3,6 +3,7 @@
 //! This module handles saving and recalling window state.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,8 +25,8 @@ pub struct SavedWindow {
 
 /// Window manager that handles saving and focusing windows
 pub struct WindowManager {
-    /// The currently saved window
-    saved_window: Arc<Mutex<Option<SavedWindow>>>,
+    /// Saved windows indexed by single character keys
+    saved_windows: Arc<Mutex<HashMap<char, SavedWindow>>>,
     /// Path to the persistence file
     config_path: std::path::PathBuf,
 }
@@ -41,26 +42,31 @@ impl WindowManager {
         std::fs::create_dir_all(&config_dir)
             .map_err(|e| PixieError::Config(format!("Failed to create config directory: {}", e)))?;
 
-        let config_path = config_dir.join("saved_window.json");
+        let config_path = config_dir.join("saved_windows.json");
 
         let manager = WindowManager {
-            saved_window: Arc::new(Mutex::new(None)),
+            saved_windows: Arc::new(Mutex::new(HashMap::new())),
             config_path,
         };
 
-        // Load saved window from disk
-        manager.load_saved_window()?;
+        // Load saved windows from disk
+        manager.load_saved_windows()?;
 
         Ok(manager)
     }
 
-    /// Get the currently saved window
-    pub fn get_saved_window(&self) -> Option<SavedWindow> {
-        self.saved_window.lock().unwrap().clone()
+    /// Get a saved window by key
+    pub fn get_saved_window(&self, key: char) -> Option<SavedWindow> {
+        self.saved_windows.lock().unwrap().get(&key).cloned()
     }
 
-    /// Register (save) the currently focused window
-    pub fn register_current_window(&self) -> Result<SavedWindow, PixieError> {
+    /// Get all saved windows
+    pub fn get_all_saved_windows(&self) -> HashMap<char, SavedWindow> {
+        self.saved_windows.lock().unwrap().clone()
+    }
+
+    /// Register (save) the currently focused window to a slot
+    pub fn register_current_window(&self, key: char) -> Result<(char, SavedWindow), PixieError> {
         // Get the focused window element (retry to handle hotkey-timing race)
         let element = accessibility::get_focused_window_with_retry(10, Duration::from_millis(50))?;
 
@@ -83,21 +89,28 @@ impl WindowManager {
 
         // Save to memory and disk
         {
-            let mut guard = self.saved_window.lock().unwrap();
-            *guard = Some(saved.clone());
+            let mut guard = self.saved_windows.lock().unwrap();
+            guard.insert(key, saved.clone());
         }
-        self.save_to_disk(&saved)?;
+        self.save_to_disk()?;
 
-        tracing::info!("Registered window: {} - {:?}", app_name, info.title);
+        tracing::info!(
+            "Registered window to slot '{}': {} - {:?}",
+            key,
+            app_name,
+            info.title
+        );
 
-        Ok(saved)
+        Ok((key, saved))
     }
 
-    /// Focus the saved window
-    pub fn focus_saved_window(&self) -> Result<SavedWindow, PixieError> {
-        let saved = self.saved_window.lock().unwrap().clone();
+    /// Focus the saved window at the given slot
+    pub fn focus_saved_window(&self, key: char) -> Result<SavedWindow, PixieError> {
+        let saved = self.saved_windows.lock().unwrap().get(&key).cloned();
 
-        let saved = saved.ok_or(PixieError::NoWindowRegistered)?;
+        let saved = saved.ok_or_else(|| {
+            PixieError::Config(format!("No window registered for slot '{}'", key))
+        })?;
 
         // Find the window element by PID and window ID
         let element = accessibility::find_window_by_id(saved.pid, saved.window_id)?;
@@ -105,15 +118,54 @@ impl WindowManager {
         // Focus the window
         accessibility::focus_window(&element)?;
 
-        tracing::info!("Focused window: {} - {:?}", saved.app_name, saved.title);
+        tracing::info!(
+            "Focused window at slot '{}': {} - {:?}",
+            key,
+            saved.app_name,
+            saved.title
+        );
 
         Ok(saved)
     }
 
-    /// Save the window state to disk
-    fn save_to_disk(&self, window: &SavedWindow) -> Result<(), PixieError> {
-        let json = serde_json::to_string_pretty(window)
-            .map_err(|e| PixieError::Config(format!("Failed to serialize window: {}", e)))?;
+    /// Clear a specific slot, returns true if a window was removed
+    pub fn clear_slot(&self, key: char) -> Result<bool, PixieError> {
+        let existed = {
+            let mut guard = self.saved_windows.lock().unwrap();
+            guard.remove(&key).is_some()
+        };
+
+        if existed {
+            self.save_to_disk()?;
+            tracing::info!("Cleared window at slot '{}'", key);
+        }
+
+        Ok(existed)
+    }
+
+    /// Clear all saved windows
+    pub fn clear_all_windows(&self) -> Result<(), PixieError> {
+        {
+            let mut guard = self.saved_windows.lock().unwrap();
+            guard.clear();
+        }
+
+        // Remove the config file
+        if self.config_path.exists() {
+            std::fs::remove_file(&self.config_path)
+                .map_err(|e| PixieError::Config(format!("Failed to remove config: {}", e)))?;
+        }
+
+        tracing::info!("Cleared all saved windows");
+
+        Ok(())
+    }
+
+    /// Save all window states to disk
+    fn save_to_disk(&self) -> Result<(), PixieError> {
+        let guard = self.saved_windows.lock().unwrap();
+        let json = serde_json::to_string_pretty(&*guard)
+            .map_err(|e| PixieError::Config(format!("Failed to serialize windows: {}", e)))?;
 
         std::fs::write(&self.config_path, json)
             .map_err(|e| PixieError::Config(format!("Failed to write config: {}", e)))?;
@@ -121,8 +173,8 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Load the saved window from disk
-    fn load_saved_window(&self) -> Result<(), PixieError> {
+    /// Load the saved windows from disk
+    fn load_saved_windows(&self) -> Result<(), PixieError> {
         if !self.config_path.exists() {
             return Ok(());
         }
@@ -130,28 +182,12 @@ impl WindowManager {
         let json = std::fs::read_to_string(&self.config_path)
             .map_err(|e| PixieError::Config(format!("Failed to read config: {}", e)))?;
 
-        let saved: SavedWindow = serde_json::from_str(&json)
+        let saved: HashMap<char, SavedWindow> = serde_json::from_str(&json)
             .map_err(|e| PixieError::Config(format!("Failed to parse config: {}", e)))?;
 
         {
-            let mut guard = self.saved_window.lock().unwrap();
-            *guard = Some(saved);
-        }
-
-        Ok(())
-    }
-
-    /// Clear the saved window
-    pub fn clear_saved_window(&self) -> Result<(), PixieError> {
-        {
-            let mut guard = self.saved_window.lock().unwrap();
-            *guard = None;
-        }
-
-        // Remove the config file
-        if self.config_path.exists() {
-            std::fs::remove_file(&self.config_path)
-                .map_err(|e| PixieError::Config(format!("Failed to remove config: {}", e)))?;
+            let mut guard = self.saved_windows.lock().unwrap();
+            *guard = saved;
         }
 
         Ok(())
