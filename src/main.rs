@@ -255,36 +255,112 @@ fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
     use cocoa::appkit::{NSApplication, NSStatusBar};
     use cocoa::base::{id, nil};
     use cocoa::foundation::NSString;
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Object, Sel};
     use objc::{class, msg_send, sel, sel_impl};
+    use std::ffi::c_void;
+
+    extern "C" fn clear_all_windows_imp(this: &Object, _sel: Sel, _sender: id) {
+        unsafe {
+            let wm_ptr: *mut c_void = *this.get_ivar("windowManager");
+            let wm = wm_ptr as *const WindowManager;
+            if let Some(wm) = wm.as_ref() {
+                let _ = wm.clear_all_windows();
+                let _ = crate::notification::notify("Pixie", "Cleared all slots");
+            }
+        }
+    }
+
+    let windows = window_manager.get_all_saved_windows();
 
     unsafe {
-        let app = NSApplication::sharedApplication(nil);
-        app.setActivationPolicy_(
-            cocoa::appkit::NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory,
-        );
+        let superclass = class!(NSObject);
+        let decl = ClassDecl::new("PixieMenuDelegate", superclass);
 
-        let status_bar = NSStatusBar::systemStatusBar(nil);
-        let status_item: id = msg_send![status_bar, statusItemWithLength: -1.0f64];
+        if let Some(mut decl) = decl {
+            decl.add_ivar::<*mut c_void>("windowManager");
+            decl.add_method(
+                sel!(clearAll:),
+                clear_all_windows_imp as extern "C" fn(&Object, Sel, id),
+            );
+            let delegate_class = decl.register();
 
-        let button: id = msg_send![status_item, button];
-        let title = NSString::alloc(nil).init_str("🧚");
-        let _: () = msg_send![button, setTitle: title];
+            let delegate: id = msg_send![delegate_class, alloc];
+            let delegate: id = msg_send![delegate, init];
 
-        let menu: id = msg_send![class!(NSMenu), alloc];
-        let _: () = msg_send![menu, init];
+            let wm_ptr = Arc::into_raw(window_manager.clone()) as *mut c_void;
+            (*delegate).set_ivar("windowManager", wm_ptr);
 
-        let quit_title = NSString::alloc(nil).init_str("Quit Pixie");
-        let quit_item: id = msg_send![class!(NSMenuItem), alloc];
-        let quit_key = NSString::alloc(nil).init_str("q");
-        let _: () = msg_send![quit_item, initWithTitle: quit_title action: sel!(terminate:) keyEquivalent: quit_key];
-        let _: () = msg_send![menu, addItem: quit_item];
+            let app = NSApplication::sharedApplication(nil);
+            app.setActivationPolicy_(
+                cocoa::appkit::NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory,
+            );
 
-        let _: () = msg_send![status_item, setMenu: menu];
-        std::mem::forget(status_item);
+            let status_bar = NSStatusBar::systemStatusBar(nil);
+            let status_item: id = msg_send![status_bar, statusItemWithLength: -1.0f64];
 
-        app.activateIgnoringOtherApps_(true);
-        let _wm = window_manager.clone();
-        std::mem::forget(_wm);
+            let button: id = msg_send![status_item, button];
+            let title = NSString::alloc(nil).init_str("🧚");
+            let _: () = msg_send![button, setTitle: title];
+
+            let menu: id = msg_send![class!(NSMenu), alloc];
+            let _: () = msg_send![menu, init];
+
+            let header_title = NSString::alloc(nil).init_str("Saved Windows");
+            let header_item: id = msg_send![class!(NSMenuItem), alloc];
+            let empty_str = NSString::alloc(nil).init_str("");
+            let _: () = msg_send![header_item, initWithTitle: header_title action: sel!(noop:) keyEquivalent: empty_str];
+            let _: () = msg_send![header_item, setEnabled: false];
+            let _: () = msg_send![menu, addItem: header_item];
+
+            if windows.is_empty() {
+                let no_windows_title = NSString::alloc(nil).init_str("No windows saved");
+                let no_windows_item: id = msg_send![class!(NSMenuItem), alloc];
+                let empty_str = NSString::alloc(nil).init_str("");
+                let _: () = msg_send![no_windows_item, initWithTitle: no_windows_title action: sel!(noop:) keyEquivalent: empty_str];
+                let _: () = msg_send![no_windows_item, setEnabled: false];
+                let _: () = msg_send![menu, addItem: no_windows_item];
+            } else {
+                let mut slots: Vec<char> = windows.keys().cloned().collect();
+                slots.sort();
+                for slot in slots {
+                    if let Some(win) = windows.get(&slot) {
+                        let display = format!("[{}] {} - {}", slot, win.app_name, win.title);
+                        let item_title = NSString::alloc(nil).init_str(&display);
+                        let item: id = msg_send![class!(NSMenuItem), alloc];
+                        let empty_str = NSString::alloc(nil).init_str("");
+                        let _: () = msg_send![item, initWithTitle: item_title action: sel!(noop:) keyEquivalent: empty_str];
+                        let _: () = msg_send![item, setEnabled: false];
+                        let _: () = msg_send![menu, addItem: item];
+                    }
+                }
+            }
+
+            let sep: id = msg_send![class!(NSMenuItem), separatorItem];
+            let _: () = msg_send![menu, addItem: sep];
+
+            let clear_title = NSString::alloc(nil).init_str("Clear All Slots");
+            let clear_item: id = msg_send![class!(NSMenuItem), alloc];
+            let empty_str = NSString::alloc(nil).init_str("");
+            let _: () = msg_send![clear_item, initWithTitle: clear_title action: sel!(clearAll:) keyEquivalent: empty_str];
+            let _: () = msg_send![clear_item, setTarget: delegate];
+            let _: () = msg_send![menu, addItem: clear_item];
+
+            let sep2: id = msg_send![class!(NSMenuItem), separatorItem];
+            let _: () = msg_send![menu, addItem: sep2];
+
+            let quit_title = NSString::alloc(nil).init_str("Quit Pixie");
+            let quit_item: id = msg_send![class!(NSMenuItem), alloc];
+            let quit_key = NSString::alloc(nil).init_str("q");
+            let _: () = msg_send![quit_item, initWithTitle: quit_title action: sel!(terminate:) keyEquivalent: quit_key];
+            let _: () = msg_send![menu, addItem: quit_item];
+
+            let _: () = msg_send![status_item, setMenu: menu];
+            let _ = status_item;
+            let _ = delegate;
+
+            app.activateIgnoringOtherApps_(true);
+        }
     }
 
     println!("Menu bar icon active. Quit from menu or Ctrl+C.");
