@@ -184,6 +184,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
     let leader_mode_controller = Arc::new(LeaderModeController::new()?);
     let hotkey_manager = hotkey::HotkeyManager::new()?;
     let leader_id = hotkey_manager.leader_id;
+    let letter_hotkeys = hotkey_manager.letter_hotkeys;
 
     let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
     let controller_for_hotkey = Arc::clone(&leader_mode_controller);
@@ -196,10 +197,16 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
         }
 
         if let Ok(event) = receiver.try_recv() {
-            if event.state == global_hotkey::HotKeyState::Pressed && event.id == leader_id {
-                controller_for_hotkey.enter_listening_mode();
-                notification::notify("Pixie", "Listening...");
-                println!("Listening...");
+            if event.state == global_hotkey::HotKeyState::Pressed {
+                if event.id == leader_id {
+                    controller_for_hotkey.enter_listening_mode();
+                    notification::notify("Pixie", "Listening...");
+                    println!("Listening...");
+                } else if let Some((letter, has_shift)) = letter_hotkeys.get(&event.id) {
+                    if controller_for_hotkey.is_listening() {
+                        controller_for_hotkey.handle_key(*letter, *has_shift);
+                    }
+                }
             }
         }
 
@@ -259,6 +266,11 @@ fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
     use objc::runtime::{Object, Sel};
     use objc::{class, msg_send, sel, sel_impl};
     use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static CLASS_CREATED: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn noop_imp(_this: &Object, _sel: Sel, _sender: id) {}
 
     extern "C" fn clear_all_windows_imp(this: &Object, _sel: Sel, _sender: id) {
         unsafe {
@@ -271,40 +283,17 @@ fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
         }
     }
 
-    let windows = window_manager.get_all_saved_windows();
+    extern "C" fn menu_needs_update_imp(this: &Object, _sel: Sel, menu: id) {
+        unsafe {
+            let _: () = msg_send![menu, removeAllItems];
 
-    unsafe {
-        let superclass = class!(NSObject);
-        let decl = ClassDecl::new("PixieMenuDelegate", superclass);
-
-        if let Some(mut decl) = decl {
-            decl.add_ivar::<*mut c_void>("windowManager");
-            decl.add_method(
-                sel!(clearAll:),
-                clear_all_windows_imp as extern "C" fn(&Object, Sel, id),
-            );
-            let delegate_class = decl.register();
-
-            let delegate: id = msg_send![delegate_class, alloc];
-            let delegate: id = msg_send![delegate, init];
-
-            let wm_ptr = Arc::into_raw(window_manager.clone()) as *mut c_void;
-            (*delegate).set_ivar("windowManager", wm_ptr);
-
-            let app = NSApplication::sharedApplication(nil);
-            app.setActivationPolicy_(
-                cocoa::appkit::NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory,
-            );
-
-            let status_bar = NSStatusBar::systemStatusBar(nil);
-            let status_item: id = msg_send![status_bar, statusItemWithLength: -1.0f64];
-
-            let button: id = msg_send![status_item, button];
-            let title = NSString::alloc(nil).init_str("🧚");
-            let _: () = msg_send![button, setTitle: title];
-
-            let menu: id = msg_send![class!(NSMenu), alloc];
-            let _: () = msg_send![menu, init];
+            let wm_ptr: *mut c_void = *this.get_ivar("windowManager");
+            let wm = wm_ptr as *const WindowManager;
+            let windows = if let Some(wm) = wm.as_ref() {
+                wm.get_all_saved_windows()
+            } else {
+                std::collections::HashMap::new()
+            };
 
             let header_title = NSString::alloc(nil).init_str("Saved Windows");
             let header_item: id = msg_send![class!(NSMenuItem), alloc];
@@ -342,6 +331,7 @@ fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
             let clear_title = NSString::alloc(nil).init_str("Clear All Slots");
             let clear_item: id = msg_send![class!(NSMenuItem), alloc];
             let empty_str = NSString::alloc(nil).init_str("");
+            let delegate: id = this as *const Object as id;
             let _: () = msg_send![clear_item, initWithTitle: clear_title action: sel!(clearAll:) keyEquivalent: empty_str];
             let _: () = msg_send![clear_item, setTarget: delegate];
             let _: () = msg_send![menu, addItem: clear_item];
@@ -354,13 +344,56 @@ fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
             let quit_key = NSString::alloc(nil).init_str("q");
             let _: () = msg_send![quit_item, initWithTitle: quit_title action: sel!(terminate:) keyEquivalent: quit_key];
             let _: () = msg_send![menu, addItem: quit_item];
-
-            let _: () = msg_send![status_item, setMenu: menu];
-            let _ = status_item;
-            let _ = delegate;
-
-            app.activateIgnoringOtherApps_(true);
         }
+    }
+
+    unsafe {
+        let delegate_class = if CLASS_CREATED.swap(true, Ordering::SeqCst) {
+            class!(PixieMenuDelegate)
+        } else {
+            let superclass = class!(NSObject);
+            let mut decl = ClassDecl::new("PixieMenuDelegate", superclass)
+                .expect("Failed to create PixieMenuDelegate class");
+            decl.add_ivar::<*mut c_void>("windowManager");
+            decl.add_method(sel!(noop:), noop_imp as extern "C" fn(&Object, Sel, id));
+            decl.add_method(
+                sel!(clearAll:),
+                clear_all_windows_imp as extern "C" fn(&Object, Sel, id),
+            );
+            decl.add_method(
+                sel!(menuNeedsUpdate:),
+                menu_needs_update_imp as extern "C" fn(&Object, Sel, id),
+            );
+            decl.register()
+        };
+
+        let delegate: id = msg_send![delegate_class, alloc];
+        let delegate: id = msg_send![delegate, init];
+
+        let wm_ptr = Arc::into_raw(window_manager.clone()) as *mut c_void;
+        (*delegate).set_ivar("windowManager", wm_ptr);
+
+        let app = NSApplication::sharedApplication(nil);
+        app.setActivationPolicy_(
+            cocoa::appkit::NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory,
+        );
+
+        let status_bar = NSStatusBar::systemStatusBar(nil);
+        let status_item: id = msg_send![status_bar, statusItemWithLength: -1.0f64];
+
+        let button: id = msg_send![status_item, button];
+        let title = NSString::alloc(nil).init_str("🧚");
+        let _: () = msg_send![button, setTitle: title];
+
+        let menu: id = msg_send![class!(NSMenu), alloc];
+        let _: () = msg_send![menu, init];
+        let _: () = msg_send![menu, setDelegate: delegate];
+
+        let _: () = msg_send![status_item, setMenu: menu];
+        let _ = status_item;
+        let _ = delegate;
+
+        app.activateIgnoringOtherApps_(true);
     }
 
     println!("Menu bar icon active. Quit from menu or Ctrl+C.");

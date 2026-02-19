@@ -1,6 +1,8 @@
 //! Global hotkey registration and handling
 //!
-//! This module manages the global shortcuts for the leader key.
+//! This module manages the global shortcuts for the leader key and letter keys.
+
+use std::collections::HashMap;
 
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
@@ -31,6 +33,8 @@ pub struct HotkeyManager {
     config: HotkeyConfig,
     /// ID of the leader hotkey
     pub leader_id: u32,
+    /// Mapping from hotkey ID to (letter, has_shift)
+    pub letter_hotkeys: HashMap<u32, (char, bool)>,
 }
 
 impl HotkeyManager {
@@ -54,10 +58,61 @@ impl HotkeyManager {
             leader_id
         );
 
+        let mut letter_hotkeys = HashMap::new();
+
+        let letter_codes = [
+            Code::KeyA,
+            Code::KeyB,
+            Code::KeyC,
+            Code::KeyD,
+            Code::KeyE,
+            Code::KeyF,
+            Code::KeyG,
+            Code::KeyH,
+            Code::KeyI,
+            Code::KeyJ,
+            Code::KeyK,
+            Code::KeyL,
+            Code::KeyM,
+            Code::KeyN,
+            Code::KeyO,
+            Code::KeyP,
+            Code::KeyQ,
+            Code::KeyR,
+            Code::KeyS,
+            Code::KeyT,
+            Code::KeyU,
+            Code::KeyV,
+            Code::KeyW,
+            Code::KeyX,
+            Code::KeyY,
+            Code::KeyZ,
+        ];
+
+        let letters = "abcdefghijklmnopqrstuvwxyz".chars().collect::<Vec<_>>();
+
+        for (code, letter) in letter_codes.iter().zip(letters.iter()) {
+            let hotkey = HotKey::new(None, *code);
+            let id = hotkey.id();
+            manager.register(hotkey)?;
+            letter_hotkeys.insert(id, (*letter, false));
+
+            let shift_hotkey = HotKey::new(Some(Modifiers::SHIFT), *code);
+            let shift_id = shift_hotkey.id();
+            manager.register(shift_hotkey)?;
+            letter_hotkeys.insert(shift_id, (*letter, true));
+        }
+
+        tracing::info!(
+            "Registered {} letter hotkeys (a-z and Shift+A-Z)",
+            letter_hotkeys.len()
+        );
+
         Ok(HotkeyManager {
             manager,
             config,
             leader_id,
+            letter_hotkeys,
         })
     }
 
