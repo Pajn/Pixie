@@ -2,6 +2,7 @@
 //!
 //! Handles TOML config file parsing and LaunchAgent management for autostart.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -10,6 +11,32 @@ use global_hotkey::hotkey::{Code, Modifiers};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PixieError, Result};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Keybind {
+    Direct {
+        modifiers: Option<Modifiers>,
+        code: Code,
+    },
+    LeaderPrefixed {
+        code: Code,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct KeybindEntry {
+    pub keybind: Keybind,
+    pub action: Action,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -21,6 +48,9 @@ pub struct Config {
 
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+
+    #[serde(default)]
+    pub keybinds: HashMap<String, Action>,
 }
 
 fn default_leader_key() -> String {
@@ -37,7 +67,35 @@ impl Default for Config {
             leader_key: default_leader_key(),
             autostart: false,
             timeout: default_timeout(),
+            keybinds: HashMap::new(),
         }
+    }
+}
+
+impl Config {
+    pub fn parse_keybind(key: &str) -> Result<Keybind> {
+        let key_lower = key.to_lowercase();
+
+        if key_lower.starts_with("leader+") {
+            let rest = &key_lower["leader+".len()..];
+            let code = parse_key_code(rest.trim())?;
+            Ok(Keybind::LeaderPrefixed { code })
+        } else {
+            let (modifiers, code) = parse_leader_key(key)?;
+            Ok(Keybind::Direct { modifiers, code })
+        }
+    }
+
+    pub fn parsed_keybinds(&self) -> Vec<KeybindEntry> {
+        self.keybinds
+            .iter()
+            .filter_map(|(key, action)| {
+                Self::parse_keybind(key).ok().map(|keybind| KeybindEntry {
+                    keybind,
+                    action: *action,
+                })
+            })
+            .collect()
     }
 }
 

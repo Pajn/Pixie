@@ -11,17 +11,21 @@ use global_hotkey::{
     GlobalHotKeyManager,
 };
 
+use crate::accessibility::Direction;
+use crate::config::{Action, Keybind, KeybindEntry};
 use crate::error::Result;
 
 #[derive(Debug, Clone)]
 pub struct HotkeyConfig {
     pub leader: (Option<Modifiers>, Code),
+    pub keybinds: Vec<KeybindEntry>,
 }
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
         HotkeyConfig {
             leader: (Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyA),
+            keybinds: Vec::new(),
         }
     }
 }
@@ -32,8 +36,12 @@ pub struct HotkeyManager {
     pub leader_id: u32,
     letter_definitions: Vec<(Code, char)>,
     letter_hotkeys: HashMap<u32, (char, bool)>,
+    arrow_hotkeys: HashMap<u32, Direction>,
     registered_hotkeys: Mutex<Vec<HotKey>>,
     letters_registered: AtomicBool,
+    direct_keybinds: HashMap<u32, Action>,
+    leader_keybinds: Mutex<HashMap<u32, Action>>,
+    leader_keybind_definitions: Vec<(Code, Action)>,
 }
 
 impl HotkeyManager {
@@ -100,10 +108,53 @@ impl HotkeyManager {
             letter_hotkeys.insert(shift_hotkey.id(), (*letter, true));
         }
 
+        let arrow_codes = [
+            (Code::ArrowLeft, Direction::Left),
+            (Code::ArrowRight, Direction::Right),
+            (Code::ArrowUp, Direction::Up),
+            (Code::ArrowDown, Direction::Down),
+        ];
+
+        let mut arrow_hotkeys = HashMap::new();
+        for (code, direction) in arrow_codes {
+            let hotkey = HotKey::new(None, code);
+            arrow_hotkeys.insert(hotkey.id(), direction);
+        }
+
         tracing::info!(
             "Prepared {} letter hotkey definitions (not registered yet)",
             letter_definitions.len()
         );
+
+        let mut direct_keybinds = HashMap::new();
+        let mut leader_keybind_definitions = Vec::new();
+
+        for entry in &config.keybinds {
+            match &entry.keybind {
+                Keybind::Direct { modifiers, code } => {
+                    let hotkey = HotKey::new(*modifiers, *code);
+                    let id = hotkey.id();
+                    if let Err(e) = manager.register(hotkey) {
+                        tracing::warn!(
+                            "Failed to register direct keybind {:?}: {}",
+                            entry.keybind,
+                            e
+                        );
+                    } else {
+                        direct_keybinds.insert(id, entry.action);
+                        tracing::info!(
+                            "Registered direct keybind: {:?} -> {:?} (id={})",
+                            entry.keybind,
+                            entry.action,
+                            id
+                        );
+                    }
+                }
+                Keybind::LeaderPrefixed { code } => {
+                    leader_keybind_definitions.push((*code, entry.action));
+                }
+            }
+        }
 
         Ok(HotkeyManager {
             manager,
@@ -111,8 +162,12 @@ impl HotkeyManager {
             leader_id,
             letter_definitions,
             letter_hotkeys,
+            arrow_hotkeys,
             registered_hotkeys: Mutex::new(Vec::new()),
             letters_registered: AtomicBool::new(false),
+            direct_keybinds,
+            leader_keybinds: Mutex::new(HashMap::new()),
+            leader_keybind_definitions,
         })
     }
 
@@ -139,6 +194,47 @@ impl HotkeyManager {
             }
         }
 
+        for (code, action) in &self.leader_keybind_definitions {
+            let hotkey = HotKey::new(None, *code);
+            let id = hotkey.id();
+            if let Err(e) = self.manager.register(hotkey) {
+                tracing::warn!(
+                    "Failed to register leader-prefixed keybind {:?}: {}",
+                    code,
+                    e
+                );
+            } else {
+                registered.push(hotkey);
+                self.leader_keybinds.lock().unwrap().insert(id, *action);
+                tracing::info!(
+                    "Registered leader-prefixed keybind: {:?} -> {:?} (id={})",
+                    code,
+                    action,
+                    id
+                );
+            }
+        }
+
+        for (code, direction) in [
+            (Code::ArrowLeft, Direction::Left),
+            (Code::ArrowRight, Direction::Right),
+            (Code::ArrowUp, Direction::Up),
+            (Code::ArrowDown, Direction::Down),
+        ] {
+            let hotkey = HotKey::new(None, code);
+            if let Err(e) = self.manager.register(hotkey) {
+                tracing::warn!("Failed to register arrow hotkey {:?}: {}", code, e);
+            } else {
+                registered.push(hotkey);
+                tracing::info!(
+                    "Registered arrow hotkey: {:?} -> {:?} (id={})",
+                    code,
+                    direction,
+                    hotkey.id()
+                );
+            }
+        }
+
         self.letters_registered.store(true, Ordering::SeqCst);
         tracing::info!("Registered {} letter hotkeys", registered.len());
 
@@ -159,6 +255,7 @@ impl HotkeyManager {
         }
 
         registered.clear();
+        self.leader_keybinds.lock().unwrap().clear();
         self.letters_registered.store(false, Ordering::SeqCst);
         tracing::info!("Unregistered all letter hotkeys");
 
@@ -171,6 +268,18 @@ impl HotkeyManager {
 
     pub fn get_letter_info(&self, id: u32) -> Option<(char, bool)> {
         self.letter_hotkeys.get(&id).copied()
+    }
+
+    pub fn get_direct_keybind_action(&self, id: u32) -> Option<Action> {
+        self.direct_keybinds.get(&id).copied()
+    }
+
+    pub fn get_leader_keybind_action(&self, id: u32) -> Option<Action> {
+        self.leader_keybinds.lock().unwrap().get(&id).copied()
+    }
+
+    pub fn get_arrow_direction(&self, id: u32) -> Option<Direction> {
+        self.arrow_hotkeys.get(&id).copied()
     }
 
     pub fn unregister(&self) -> Result<()> {

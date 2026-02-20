@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use config::Action;
 use error::{PixieError, Result};
 use leader_mode::{LeaderModeController, LeaderModeEvent};
 use window::WindowManager;
@@ -162,6 +163,30 @@ fn handle_command(cmd: Commands, window_manager: &WindowManager) -> Result<()> {
     Ok(())
 }
 
+fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
+    let direction = match action {
+        Action::FocusLeft => accessibility::Direction::Left,
+        Action::FocusRight => accessibility::Direction::Right,
+        Action::FocusUp => accessibility::Direction::Up,
+        Action::FocusDown => accessibility::Direction::Down,
+    };
+
+    match accessibility::get_focused_window() {
+        Ok(focused_element) => match accessibility::get_window_rect(&focused_element) {
+            Ok(from_rect) => match accessibility::find_window_in_direction(&from_rect, direction) {
+                Ok(target_window) => {
+                    if let Err(e) = accessibility::focus_window(&target_window) {
+                        eprintln!("✗ Failed to focus window: {}", e);
+                    }
+                }
+                Err(e) => eprintln!("✗ No window found {:?}: {}", direction, e),
+            },
+            Err(e) => eprintln!("✗ Failed to get window rect: {}", e),
+        },
+        Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+    }
+}
+
 fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> {
     let config = config::load();
 
@@ -182,11 +207,35 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
         )
     });
 
+    let keybinds = config.parsed_keybinds();
+    let direct_keybinds: Vec<_> = keybinds
+        .iter()
+        .filter(|k| matches!(k.keybind, config::Keybind::Direct { .. }))
+        .collect();
+    let leader_keybinds: Vec<_> = keybinds
+        .iter()
+        .filter(|k| matches!(k.keybind, config::Keybind::LeaderPrefixed { .. }))
+        .collect();
+
     println!("🧚 Pixie started");
     println!(
         "  {} - Leader key (then press a letter to focus, or Shift+letter to register)",
         config.leader_key
     );
+
+    if !direct_keybinds.is_empty() {
+        println!("  Direct keybinds:");
+        for entry in direct_keybinds {
+            println!("    {:?} -> {:?}", entry.keybind, entry.action);
+        }
+    }
+
+    if !leader_keybinds.is_empty() {
+        println!("  Leader-prefixed keybinds:");
+        for entry in leader_keybinds {
+            println!("    {:?} -> {:?}", entry.keybind, entry.action);
+        }
+    }
 
     let windows = window_manager.get_all_saved_windows();
     if windows.is_empty() {
@@ -207,7 +256,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
     let leader_mode_controller = Arc::new(LeaderModeController::with_timeout(
         std::time::Duration::from_secs(config.timeout),
     )?);
-    let hotkey_config = hotkey::HotkeyConfig { leader };
+    let hotkey_config = hotkey::HotkeyConfig { leader, keybinds };
     let hotkey_manager = Arc::new(hotkey::HotkeyManager::with_config(hotkey_config)?);
     let leader_id = hotkey_manager.leader_id;
 
@@ -229,10 +278,24 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                     controller_for_hotkey.enter_listening_mode();
                     notification::notify("Pixie", "Listening...");
                     println!("Listening...");
-                } else if let Some((letter, has_shift)) =
-                    hotkey_manager_for_thread.get_letter_info(event.id)
+                } else if let Some(action) =
+                    hotkey_manager_for_thread.get_direct_keybind_action(event.id)
                 {
-                    if controller_for_hotkey.is_listening() {
+                    controller_for_hotkey.send_action(action);
+                } else if controller_for_hotkey.is_listening() {
+                    if let Some(action) =
+                        hotkey_manager_for_thread.get_leader_keybind_action(event.id)
+                    {
+                        hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
+                        controller_for_hotkey.handle_action(action);
+                    } else if let Some(direction) =
+                        hotkey_manager_for_thread.get_arrow_direction(event.id)
+                    {
+                        hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
+                        controller_for_hotkey.handle_direction(direction);
+                    } else if let Some((letter, has_shift)) =
+                        hotkey_manager_for_thread.get_letter_info(event.id)
+                    {
                         hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
                         controller_for_hotkey.handle_key(letter, has_shift);
                     }
@@ -269,6 +332,30 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                     hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
                     notification::notify("Pixie", "Cancelled");
                     println!("Cancelled");
+                }
+                LeaderModeEvent::KeybindAction(action) => {
+                    handle_keybind_action(&action, &wm_for_events);
+                }
+                LeaderModeEvent::FocusDirection(direction) => {
+                    match accessibility::get_focused_window() {
+                        Ok(focused_element) => {
+                            match accessibility::get_window_rect(&focused_element) {
+                                Ok(from_rect) => match accessibility::find_window_in_direction(
+                                    &from_rect, direction,
+                                ) {
+                                    Ok(target_window) => {
+                                        if let Err(e) = accessibility::focus_window(&target_window)
+                                        {
+                                            eprintln!("✗ Failed to focus window: {}", e);
+                                        }
+                                    }
+                                    Err(e) => eprintln!("✗ No window found {:?}: {}", direction, e),
+                                },
+                                Err(e) => eprintln!("✗ Failed to get window rect: {}", e),
+                            }
+                        }
+                        Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+                    }
                 }
             }
         }
@@ -426,8 +513,20 @@ fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
 
         let image: id = msg_send![class!(NSImage), alloc];
         let image: id = msg_send![image, initWithContentsOfFile: image_path_ns];
-        let _: () = msg_send![image, setTemplate: YES];
-        let _: () = msg_send![button, setImage: image];
+        if image.is_null() {
+            let symbol_name = NSString::alloc(nil).init_str("wand.and.stars");
+            let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName: symbol_name accessibilityDescription: nil];
+            if !image.is_null() {
+                let _: () = msg_send![image, setTemplate: YES];
+                let _: () = msg_send![button, setImage: image];
+            } else {
+                let title = NSString::alloc(nil).init_str("🧚");
+                let _: () = msg_send![button, setTitle: title];
+            }
+        } else {
+            let _: () = msg_send![image, setTemplate: YES];
+            let _: () = msg_send![button, setImage: image];
+        }
 
         let menu: id = msg_send![class!(NSMenu), alloc];
         let _: () = msg_send![menu, init];

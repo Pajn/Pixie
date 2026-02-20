@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::accessibility::Direction;
+use crate::config::Action;
 use crate::error::Result;
 
 #[derive(Debug, Clone)]
@@ -11,6 +13,8 @@ pub enum LeaderModeEvent {
     RegisterSlot(char),
     FocusSlot(char),
     Cancelled,
+    KeybindAction(Action),
+    FocusDirection(Direction),
 }
 
 pub struct LeaderModeController {
@@ -68,6 +72,26 @@ impl LeaderModeController {
         if self.is_listening.swap(false, Ordering::SeqCst) {
             let _ = self.event_sender.send(LeaderModeEvent::Cancelled);
         }
+    }
+
+    pub fn handle_action(&self, action: Action) {
+        self.is_listening.store(false, Ordering::SeqCst);
+        let _ = self
+            .event_sender
+            .send(LeaderModeEvent::KeybindAction(action));
+    }
+
+    pub fn handle_direction(&self, direction: Direction) {
+        self.is_listening.store(false, Ordering::SeqCst);
+        let _ = self
+            .event_sender
+            .send(LeaderModeEvent::FocusDirection(direction));
+    }
+
+    pub fn send_action(&self, action: Action) {
+        let _ = self
+            .event_sender
+            .send(LeaderModeEvent::KeybindAction(action));
     }
 
     pub fn events(&self) -> Receiver<LeaderModeEvent> {
