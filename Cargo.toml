@@ -49,3 +49,15 @@ crossbeam = "0.8"
 opt-level = 2
 lto = true
 strip = true
+
+# App bundle configuration for cargo-bundle
+[package.metadata.bundle]
+name = "Pixie"
+identifier = "com.pixie.app"
+icon = ["AppIcon.icns"]
+resources = ["menuTemplate@2x.png"]
+category = "public.app-category.utilities"
+short_description = "macOS window focusing tool with global shortcuts"
+long_description = "Pixie is a macOS window focus tool with a leader key system for keyboard-driven window management"
+osx_minimum_system_version = "10.15"
+osx_info_plist_exts = ["Info.plist.ext"]

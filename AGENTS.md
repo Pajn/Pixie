@@ -13,8 +13,12 @@
 - Run tests: `cargo test`
 - Run app locally: `cargo run`
 - Build release binary: `cargo build --release`
+- Build app bundle: `cargo bundle --release`
 
 ## App Bundle + Signing
+- Uses `cargo-bundle` for app bundling (install with `just install-bundler` or `cargo install cargo-bundle`).
+- Bundle configuration is in `Cargo.toml` under `[package.metadata.bundle]`.
+- Custom Info.plist entries (LSUIElement, NSAppleEventsUsageDescription) are in `Info.plist.ext`.
 - Build/sign via Just:
   - Ad-hoc signing (default): `just signed-app`
   - Explicit identity: `just signed-app identity="Developer ID Application: Your Name (TEAMID)"`

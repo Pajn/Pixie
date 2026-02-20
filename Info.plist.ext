@@ -1,0 +1,4 @@
+<key>LSUIElement</key>
+<true/>
+<key>NSAppleEventsUsageDescription</key>
+<string>Pixie needs to control other applications to focus windows.</string>
