@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{PixieError, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     FocusLeft,
@@ -27,6 +27,19 @@ pub enum Action {
     MoveMonitorRight,
     MoveMonitorUp,
     MoveMonitorDown,
+    Place(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Placement {
+    #[serde(default)]
+    pub top: Option<String>,
+    #[serde(default)]
+    pub left: Option<String>,
+    #[serde(default)]
+    pub width: Option<String>,
+    #[serde(default)]
+    pub height: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +72,9 @@ pub struct Config {
 
     #[serde(default)]
     pub keybinds: HashMap<String, Action>,
+
+    #[serde(default)]
+    pub placements: HashMap<String, Placement>,
 }
 
 fn default_leader_key() -> String {
@@ -76,6 +92,7 @@ impl Default for Config {
             autostart: false,
             timeout: default_timeout(),
             keybinds: HashMap::new(),
+            placements: HashMap::new(),
         }
     }
 }
@@ -100,10 +117,16 @@ impl Config {
             .filter_map(|(key, action)| {
                 Self::parse_keybind(key).ok().map(|keybind| KeybindEntry {
                     keybind,
-                    action: *action,
+                    action: action.clone(),
                 })
             })
             .collect()
+    }
+
+    pub fn get_placements(&self) -> HashMap<String, Placement> {
+        let mut placements = builtin_placements();
+        placements.extend(self.placements.clone());
+        placements
     }
 }
 
@@ -121,6 +144,133 @@ pub fn load() -> Config {
         Ok(content) => toml::from_str(&content).unwrap_or_default(),
         Err(_) => Config::default(),
     }
+}
+
+pub fn builtin_placements() -> HashMap<String, Placement> {
+    let mut placements = HashMap::new();
+
+    placements.insert(
+        "left".to_string(),
+        Placement {
+            left: Some("0%".to_string()),
+            width: Some("50%".to_string()),
+            height: Some("100%".to_string()),
+            top: None,
+        },
+    );
+
+    placements.insert(
+        "right".to_string(),
+        Placement {
+            left: Some("50%".to_string()),
+            width: Some("50%".to_string()),
+            height: Some("100%".to_string()),
+            top: None,
+        },
+    );
+
+    placements.insert(
+        "top".to_string(),
+        Placement {
+            top: Some("0%".to_string()),
+            width: Some("100%".to_string()),
+            height: Some("50%".to_string()),
+            left: None,
+        },
+    );
+
+    placements.insert(
+        "bottom".to_string(),
+        Placement {
+            top: Some("50%".to_string()),
+            width: Some("100%".to_string()),
+            height: Some("50%".to_string()),
+            left: None,
+        },
+    );
+
+    placements.insert(
+        "top_left".to_string(),
+        Placement {
+            top: Some("0%".to_string()),
+            left: Some("0%".to_string()),
+            width: Some("50%".to_string()),
+            height: Some("50%".to_string()),
+        },
+    );
+
+    placements.insert(
+        "top_right".to_string(),
+        Placement {
+            top: Some("0%".to_string()),
+            left: Some("50%".to_string()),
+            width: Some("50%".to_string()),
+            height: Some("50%".to_string()),
+        },
+    );
+
+    placements.insert(
+        "bottom_left".to_string(),
+        Placement {
+            top: Some("50%".to_string()),
+            left: Some("0%".to_string()),
+            width: Some("50%".to_string()),
+            height: Some("50%".to_string()),
+        },
+    );
+
+    placements.insert(
+        "bottom_right".to_string(),
+        Placement {
+            top: Some("50%".to_string()),
+            left: Some("50%".to_string()),
+            width: Some("50%".to_string()),
+            height: Some("50%".to_string()),
+        },
+    );
+
+    placements.insert(
+        "center".to_string(),
+        Placement {
+            top: Some("center".to_string()),
+            left: Some("center".to_string()),
+            width: None,
+            height: None,
+        },
+    );
+
+    placements
+}
+
+pub fn parse_percentage(s: &str) -> Result<f64> {
+    let s = s.trim();
+    if !s.ends_with('%') {
+        return Err(PixieError::Config(format!(
+            "Invalid percentage format: {}",
+            s
+        )));
+    }
+
+    let num_str = &s[..s.len() - 1];
+    let num: f64 = num_str
+        .parse()
+        .map_err(|e| PixieError::Config(format!("Invalid percentage number: {}", e)))?;
+
+    Ok(num / 100.0)
+}
+
+pub fn parse_position_value(s: &str, screen_size: f64, window_size: f64) -> Result<f64> {
+    let s = s.trim();
+    if s == "center" {
+        return Ok((screen_size - window_size) / 2.0);
+    }
+    let pct = parse_percentage(s)?;
+    Ok(pct * screen_size)
+}
+
+pub fn parse_size_value(s: &str, screen_size: f64) -> Result<f64> {
+    let pct = parse_percentage(s)?;
+    Ok(pct * screen_size)
 }
 
 pub fn parse_leader_key(key: &str) -> Result<(Option<Modifiers>, Code)> {

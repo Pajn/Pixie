@@ -742,11 +742,10 @@ pub fn set_window_rect(
     height: f64,
 ) -> Result<(), PixieError> {
     use accessibility_sys::AXValueCreate;
-    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use core_graphics::geometry::{CGPoint, CGSize};
 
     unsafe {
         let position = CGPoint::new(x, y);
-        let position_rect = CGRect::new(&position, &CGSize::new(1.0, 1.0));
         let position_value = AXValueCreate(
             accessibility_sys::kAXValueTypeCGPoint,
             &position as *const _ as *const _,
@@ -1015,4 +1014,45 @@ fn find_adjacent_screen(
         .cloned();
 
     fallback.ok_or_else(|| PixieError::Accessibility("No adjacent monitor found".to_string()))
+}
+
+pub fn apply_placement(
+    element: &AXUIElement,
+    placement: &crate::config::Placement,
+) -> Result<(), PixieError> {
+    let window_rect = get_window_rect(element)?;
+    let screen = get_screen_for_window(&window_rect)?;
+
+    let menu_bar_height = if screen.is_main { 25.0 } else { 0.0 };
+
+    let available_x = screen.x;
+    let available_y = screen.y + menu_bar_height;
+    let available_width = screen.width;
+    let available_height = screen.height - menu_bar_height;
+
+    let new_width = match &placement.width {
+        Some(w) => crate::config::parse_size_value(w, available_width)?,
+        None => window_rect.width,
+    };
+
+    let new_height = match &placement.height {
+        Some(h) => crate::config::parse_size_value(h, available_height)?,
+        None => window_rect.height,
+    };
+
+    let new_x = match &placement.left {
+        Some(l) => {
+            available_x + crate::config::parse_position_value(l, available_width, new_width)?
+        }
+        None => window_rect.x,
+    };
+
+    let new_y = match &placement.top {
+        Some(t) => {
+            available_y + crate::config::parse_position_value(t, available_height, new_height)?
+        }
+        None => window_rect.y,
+    };
+
+    set_window_rect(element, new_x, new_y, new_width, new_height)
 }

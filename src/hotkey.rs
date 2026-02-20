@@ -141,7 +141,7 @@ impl HotkeyManager {
                             e
                         );
                     } else {
-                        direct_keybinds.insert(id, entry.action);
+                        direct_keybinds.insert(id, entry.action.clone());
                         tracing::info!(
                             "Registered direct keybind: {:?} -> {:?} (id={})",
                             entry.keybind,
@@ -151,7 +151,7 @@ impl HotkeyManager {
                     }
                 }
                 Keybind::LeaderPrefixed { code } => {
-                    leader_keybind_definitions.push((*code, entry.action));
+                    leader_keybind_definitions.push((*code, entry.action.clone()));
                 }
             }
         }
@@ -205,7 +205,10 @@ impl HotkeyManager {
                 );
             } else {
                 registered.push(hotkey);
-                self.leader_keybinds.lock().unwrap().insert(id, *action);
+                self.leader_keybinds
+                    .lock()
+                    .unwrap()
+                    .insert(id, action.clone());
                 tracing::info!(
                     "Registered leader-prefixed keybind: {:?} -> {:?} (id={})",
                     code,
@@ -271,11 +274,11 @@ impl HotkeyManager {
     }
 
     pub fn get_direct_keybind_action(&self, id: u32) -> Option<Action> {
-        self.direct_keybinds.get(&id).copied()
+        self.direct_keybinds.get(&id).cloned()
     }
 
     pub fn get_leader_keybind_action(&self, id: u32) -> Option<Action> {
-        self.leader_keybinds.lock().unwrap().get(&id).copied()
+        self.leader_keybinds.lock().unwrap().get(&id).cloned()
     }
 
     pub fn get_arrow_direction(&self, id: u32) -> Option<Direction> {

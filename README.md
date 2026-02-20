@@ -82,8 +82,61 @@ Pixie provides window manipulation actions that can be bound to keys in your con
 | `focus_right` | Focus the window to the right |
 | `focus_up` | Focus the window above |
 | `focus_down` | Focus the window below |
+| `place_<name>` | Place window using a builtin or custom placement |
 
 These actions have no default shortcuts. Configure them in your `config.toml` under `[keybinds]`.
+
+### Builtin Placements
+
+| Placement | Position | Size |
+|-----------|----------|------|
+| `left` | Left half | 50% width, 100% height |
+| `right` | Right half | 50% width, 100% height |
+| `top` | Top half | 100% width, 50% height |
+| `bottom` | Bottom half | 100% width, 50% height |
+| `top_left` | Top-left quarter | 50% width, 50% height |
+| `top_right` | Top-right quarter | 50% width, 50% height |
+| `bottom_left` | Bottom-left quarter | 50% width, 50% height |
+| `bottom_right` | Bottom-right quarter | 50% width, 50% height |
+| `center` | Centered (keeps window size) | Unchanged |
+
+## Window Placements
+
+Placements position and size windows using screen percentages. Use them with the `place_<name>` action format:
+
+```toml
+[keybinds]
+"leader+h" = "place_left"
+```
+
+### Custom Placements
+
+Define custom placements in your config:
+
+```toml
+[placements]
+[placements.third_left]
+left = "0%"
+width = "33%"
+height = "100%"
+
+[placements.third_middle]
+left = "33%"
+width = "34%"
+height = "100%"
+
+[placements.third_right]
+left = "67%"
+width = "33%"
+height = "100%"
+```
+
+Then bind them: `"leader+1" = "place_third_left"`
+
+Placement fields:
+- `top`, `left` - Position (percentage string like `"50%"`, or `"center"` to center while keeping size)
+- `width`, `height` - Size (percentage string like `"50%"`)
+- Omitted fields keep the window's current value
 
 ### CLI Commands
 
@@ -165,6 +218,22 @@ timeout = 2
 "leader+f" = "fullscreen"
 "leader+c" = "center"
 
+# Builtin placements
+"leader+h" = "place_left"
+"leader+l" = "place_right"
+"leader+k" = "place_top"
+"leader+j" = "place_bottom"
+"leader+u" = "place_top_left"
+"leader+i" = "place_top_right"
+"leader+n" = "place_bottom_left"
+"leader+m" = "place_bottom_right"
+"leader+c" = "place_center"
+
+# Custom placements
+"leader+1" = "place_third_left"
+"leader+2" = "place_third_middle"
+"leader+3" = "place_third_right"
+
 # Move window between monitors (preserves relative position)
 "leader+left" = "move_monitor_left"
 "leader+right" = "move_monitor_right"
@@ -174,6 +243,23 @@ timeout = 2
 # Direct keybinds (work without leader key)
 "cmd+ctrl+m" = "minimize"
 "cmd+ctrl+f" = "fullscreen"
+
+# Custom placements
+[placements]
+[placements.third_left]
+left = "0%"
+width = "33%"
+height = "100%"
+
+[placements.third_middle]
+left = "33%"
+width = "34%"
+height = "100%"
+
+[placements.third_right]
+left = "67%"
+width = "33%"
+height = "100%"
 ```
 
 ### Leader Key Options

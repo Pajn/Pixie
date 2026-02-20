@@ -42,7 +42,8 @@
 - Multi-window storage uses `HashMap<char, SavedWindow>` for saving/focusing windows by slot key.
 - Persistence file: `saved_windows.json` in the user's config directory.
 - Notification system uses `osascript` to display macOS notifications.
-- The `Action` enum in `config.rs` defines all available actions: focus_*, minimize, maximize, fullscreen, center, move_monitor_*.
-- Window manipulation functions are in `accessibility.rs`: `minimize_window`, `maximize_window`, `toggle_fullscreen`, `center_window`.
+- The `Action` enum in `config.rs` defines all available actions: focus_*, minimize, maximize, fullscreen, center, move_monitor_*, Place(String).
+- Window manipulation functions are in `accessibility.rs`: `minimize_window`, `maximize_window`, `toggle_fullscreen`, `center_window`, `apply_placement`.
+- The `Placement` struct and builtin placements are defined in `config.rs`.
 - Monitor movement functions in `accessibility.rs`: `move_window_to_monitor`, `get_all_screens`, and `Screen` struct for monitor detection.
 - Move monitor logic preserves relative window position by calculating percentage-based coordinates across screens.

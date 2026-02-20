@@ -215,14 +215,6 @@ fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
             }
             Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
         },
-        Action::Center => match accessibility::get_focused_window() {
-            Ok(element) => {
-                if let Err(e) = accessibility::center_window(&element) {
-                    eprintln!("✗ Failed to center window: {}", e);
-                }
-            }
-            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
-        },
         Action::MoveMonitorLeft
         | Action::MoveMonitorRight
         | Action::MoveMonitorUp
@@ -244,6 +236,31 @@ fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
                 Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
             }
         }
+        Action::Center => match accessibility::get_focused_window() {
+            Ok(element) => {
+                let placements = config::builtin_placements();
+                if let Some(placement) = placements.get("center") {
+                    if let Err(e) = accessibility::apply_placement(&element, placement) {
+                        eprintln!("✗ Failed to center window: {}", e);
+                    }
+                }
+            }
+            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+        },
+        Action::Place(name) => match accessibility::get_focused_window() {
+            Ok(element) => {
+                let config = config::load();
+                let placements = config.get_placements();
+                if let Some(placement) = placements.get(name) {
+                    if let Err(e) = accessibility::apply_placement(&element, placement) {
+                        eprintln!("✗ Failed to apply placement '{}': {}", name, e);
+                    }
+                } else {
+                    eprintln!("✗ Placement '{}' not found", name);
+                }
+            }
+            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+        },
     }
 }
 
