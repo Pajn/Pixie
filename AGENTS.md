@@ -6,6 +6,7 @@
 - Main entrypoint: `src/main.rs`.
 - Accessibility/window logic: `src/accessibility.rs` and `src/window.rs`.
 - Leader key state machine: `src/leader_mode.rs`.
+- Hotkey management: `src/hotkey.rs`.
 - Notification system: `src/notification.rs`.
 
 ## Development Commands
@@ -20,13 +21,18 @@
 - Output bundle: `dist/Pixie.app`
 
 ## Dependencies
-- `rdev` with `unstable_grab` feature for global keyboard event grabbing.
+- `global-hotkey` for global hotkey registration (leader key and letter keys).
 
 ## Implementation Notes
 - Keep changes minimal and focused.
 - Preserve existing CLI behavior unless explicitly requested.
 - If changing Accessibility behavior, verify with runtime testing on macOS.
 - Leader key state machine is implemented in `leader_mode.rs` with states: Idle, Listening.
+- Hotkey system uses dynamic registration:
+  - Leader key (default: Cmd+Shift+A) is registered at startup.
+  - Letter hotkeys (a-z, Shift+A-Z) are only registered when in listening mode.
+  - Letter hotkeys are unregistered when exiting listening mode (key press or timeout).
+  - This prevents letter keys from being blocked when Pixie is idle.
 - Multi-window storage uses `HashMap<char, SavedWindow>` for saving/focusing windows by slot key.
 - Persistence file: `saved_windows.json` in the user's config directory.
 - Notification system uses `osascript` to display macOS notifications.

@@ -204,14 +204,16 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
     })
     .map_err(|e| PixieError::Config(format!("Failed to set Ctrl+C handler: {}", e)))?;
 
-    let leader_mode_controller = Arc::new(LeaderModeController::new()?);
+    let leader_mode_controller = Arc::new(LeaderModeController::with_timeout(
+        std::time::Duration::from_secs(config.timeout),
+    )?);
     let hotkey_config = hotkey::HotkeyConfig { leader };
-    let hotkey_manager = hotkey::HotkeyManager::with_config(hotkey_config)?;
+    let hotkey_manager = Arc::new(hotkey::HotkeyManager::with_config(hotkey_config)?);
     let leader_id = hotkey_manager.leader_id;
-    let letter_hotkeys = hotkey_manager.letter_hotkeys;
 
     let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
     let controller_for_hotkey = Arc::clone(&leader_mode_controller);
+    let hotkey_manager_for_thread = Arc::clone(&hotkey_manager);
     let wm_for_events = Arc::clone(&window_manager);
     let event_receiver = leader_mode_controller.events();
 
@@ -223,12 +225,16 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
         if let Ok(event) = receiver.try_recv() {
             if event.state == global_hotkey::HotKeyState::Pressed {
                 if event.id == leader_id {
+                    hotkey_manager_for_thread.register_letter_hotkeys().ok();
                     controller_for_hotkey.enter_listening_mode();
                     notification::notify("Pixie", "Listening...");
                     println!("Listening...");
-                } else if let Some((letter, has_shift)) = letter_hotkeys.get(&event.id) {
+                } else if let Some((letter, has_shift)) =
+                    hotkey_manager_for_thread.get_letter_info(event.id)
+                {
                     if controller_for_hotkey.is_listening() {
-                        controller_for_hotkey.handle_key(*letter, *has_shift);
+                        hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
+                        controller_for_hotkey.handle_key(letter, has_shift);
                     }
                 }
             }
@@ -260,6 +266,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                     Err(e) => eprintln!("✗ Failed: {}", e),
                 },
                 LeaderModeEvent::Cancelled => {
+                    hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
                     notification::notify("Pixie", "Cancelled");
                     println!("Cancelled");
                 }
@@ -284,7 +291,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
 #[cfg(target_os = "macos")]
 fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
     use cocoa::appkit::{NSApplication, NSStatusBar};
-    use cocoa::base::{id, nil};
+    use cocoa::base::{id, nil, YES};
     use cocoa::foundation::NSString;
     use objc::declare::ClassDecl;
     use objc::runtime::{Object, Sel};
@@ -406,8 +413,21 @@ fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
         let status_item: id = msg_send![status_bar, statusItemWithLength: -1.0f64];
 
         let button: id = msg_send![status_item, button];
-        let title = NSString::alloc(nil).init_str("🧚");
-        let _: () = msg_send![button, setTitle: title];
+
+        let bundle: id = msg_send![class!(NSBundle), mainBundle];
+        let resource_path: id = msg_send![bundle, resourcePath];
+        let resource_path_str: *const i8 = msg_send![resource_path, UTF8String];
+        let resource_path_cstr = std::ffi::CStr::from_ptr(resource_path_str);
+        let image_path = format!(
+            "{}/menuTemplate@2x.png",
+            resource_path_cstr.to_str().unwrap()
+        );
+        let image_path_ns = NSString::alloc(nil).init_str(&image_path);
+
+        let image: id = msg_send![class!(NSImage), alloc];
+        let image: id = msg_send![image, initWithContentsOfFile: image_path_ns];
+        let _: () = msg_send![image, setTemplate: YES];
+        let _: () = msg_send![button, setImage: image];
 
         let menu: id = msg_send![class!(NSMenu), alloc];
         let _: () = msg_send![menu, init];

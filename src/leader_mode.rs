@@ -6,8 +6,6 @@ use std::time::Duration;
 
 use crate::error::Result;
 
-const LISTEN_TIMEOUT: Duration = Duration::from_secs(2);
-
 #[derive(Debug, Clone)]
 pub enum LeaderModeEvent {
     RegisterSlot(char),
@@ -19,10 +17,15 @@ pub struct LeaderModeController {
     event_receiver: Receiver<LeaderModeEvent>,
     event_sender: Sender<LeaderModeEvent>,
     is_listening: Arc<AtomicBool>,
+    timeout: Duration,
 }
 
 impl LeaderModeController {
     pub fn new() -> Result<Self> {
+        Self::with_timeout(Duration::from_secs(2))
+    }
+
+    pub fn with_timeout(timeout: Duration) -> Result<Self> {
         let (event_sender, event_receiver) = unbounded();
         let is_listening = Arc::new(AtomicBool::new(false));
 
@@ -30,6 +33,7 @@ impl LeaderModeController {
             event_receiver,
             event_sender,
             is_listening,
+            timeout,
         })
     }
 
@@ -38,8 +42,9 @@ impl LeaderModeController {
 
         let is_listening = Arc::clone(&self.is_listening);
         let sender = self.event_sender.clone();
+        let timeout = self.timeout;
         thread::spawn(move || {
-            thread::sleep(LISTEN_TIMEOUT);
+            thread::sleep(timeout);
             if is_listening.swap(false, Ordering::SeqCst) {
                 let _ = sender.send(LeaderModeEvent::Cancelled);
             }

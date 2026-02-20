@@ -18,10 +18,17 @@ pub struct Config {
 
     #[serde(default)]
     pub autostart: bool,
+
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
 }
 
 fn default_leader_key() -> String {
     "cmd+shift+a".to_string()
+}
+
+fn default_timeout() -> u64 {
+    2
 }
 
 impl Default for Config {
@@ -29,6 +36,7 @@ impl Default for Config {
         Config {
             leader_key: default_leader_key(),
             autostart: false,
+            timeout: default_timeout(),
         }
     }
 }
@@ -90,7 +98,32 @@ fn parse_modifier(s: &str) -> Result<Modifiers> {
     }
 }
 
+fn special_key_to_code(s: &str) -> Option<Code> {
+    match s.to_lowercase().as_str() {
+        "space" => Some(Code::Space),
+        "escape" | "esc" => Some(Code::Escape),
+        "enter" | "return" => Some(Code::Enter),
+        "tab" => Some(Code::Tab),
+        "backspace" => Some(Code::Backspace),
+        "delete" => Some(Code::Delete),
+        "insert" => Some(Code::Insert),
+        "home" => Some(Code::Home),
+        "end" => Some(Code::End),
+        "pageup" => Some(Code::PageUp),
+        "pagedown" => Some(Code::PageDown),
+        "up" => Some(Code::ArrowUp),
+        "down" => Some(Code::ArrowDown),
+        "left" => Some(Code::ArrowLeft),
+        "right" => Some(Code::ArrowRight),
+        _ => None,
+    }
+}
+
 fn parse_key_code(s: &str) -> Result<Code> {
+    if let Some(code) = special_key_to_code(s) {
+        return Ok(code);
+    }
+
     if s.len() == 1 {
         let c = s.chars().next().unwrap();
         if c.is_ascii_lowercase() {

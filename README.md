@@ -12,6 +12,8 @@ A lightweight macOS window focusing tool with global shortcuts and multi-window 
 - **CLI Support**: Use from the command line for scripting
 - **Persistence**: Saved windows survive app restarts
 - **Lightweight**: Minimal resource usage
+- **Configurable Hotkeys**: Customize the leader key via config file
+- **Auto-start**: Optionally launch Pixie at login
 
 ## Installation
 
@@ -54,7 +56,7 @@ Pixie uses a leader key system. Press **⌘⇧A** (Cmd+Shift+A) to enter leader 
 | `a-z` | Focus the window registered at that letter slot |
 | `A-Z` (Shift+a-z) | Register the currently focused window to that slot |
 | `Escape` | Cancel leader mode |
-| *(2 second timeout)* | Leader mode auto-cancels after 2 seconds |
+| *(configurable timeout, default 2 seconds)* | Leader mode auto-cancels after timeout |
 
 **Examples:**
 - `⌘⇧A` then `f` → Focus window at slot 'f'
@@ -98,7 +100,7 @@ When running in menu bar mode, you can:
 
 ## How It Works
 
-1. **Leader Mode**: Press `⌘⇧A` to enter leader mode. Pixie listens for the next keypress (with a 2-second timeout).
+1. **Leader Mode**: Press `⌘⇧A` to enter leader mode. Pixie listens for the next keypress (with a configurable timeout, default 2 seconds).
 
 2. **Register**: Press a letter key with Shift (e.g., `Shift+m`) to register the currently focused window to that slot. Pixie captures the window using the macOS Accessibility API and stores its PID and CGWindowID.
 
@@ -111,7 +113,58 @@ When running in menu bar mode, you can:
 
 ## Configuration
 
-Window state is persisted in `~/.config/pixie/saved_windows.json`.
+Pixie can be configured via a TOML config file at `~/Library/Application Support/pixie/config.toml`.
+
+### Config File Example
+
+```toml
+# Leader key (modifiers + key, separated by +)
+# Modifiers: cmd/super, alt/option, shift, ctrl/control
+# Keys: a-z, 0-9, F1-F12, space, escape, enter, tab, etc.
+leader_key = "cmd+shift+a"
+
+# Auto-start Pixie on login
+autostart = false
+
+# Leader mode timeout in seconds (how long to wait for a letter key after pressing leader)
+timeout = 2
+```
+
+### Leader Key Options
+
+**Modifiers:**
+- `cmd` or `super` - Command (⌘) key
+- `alt` or `option` - Option (⌥) key
+- `shift` - Shift (⇧) key
+- `ctrl` or `control` - Control (^) key
+
+**Keys:**
+- Letters: `a` through `z`
+- Numbers: `0` through `9`
+- Function keys: `f1` through `f12`
+- Special keys: `space`, `escape` (or `esc`), `enter` (or `return`), `tab`, `backspace`, `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`
+
+### Example Configurations
+
+```toml
+# Use Cmd+Escape as leader (no conflict with Spotlight)
+leader_key = "cmd+escape"
+autostart = true
+timeout = 3
+```
+
+```toml
+# Use F13 as leader with longer timeout
+leader_key = "f13"
+autostart = true
+timeout = 5
+```
+
+### Data Storage
+
+- Config file: `~/Library/Application Support/pixie/config.toml`
+- Saved windows: `~/Library/Application Support/pixie/saved_windows.json`
+- LaunchAgent (for autostart): `~/Library/LaunchAgents/com.pixie.plist`
 
 ## Requirements
 
