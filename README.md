@@ -1,18 +1,20 @@
 # Pixie 🧚
 
-A lightweight macOS window focusing tool with global shortcuts and multi-window support. Register windows to letter slots (a-z), then instantly focus them from anywhere using the leader key system.
+A lightweight macOS window management tool with global shortcuts and multi-window support. Register windows to letter slots (a-z), then instantly focus them from anywhere using the leader key system. Includes window manipulation actions like minimize, maximize, fullscreen, center, and monitor movement.
 
 ## Features
 
 - **Leader Key System**: ⌘⇧A activates leader mode for quick window operations
 - **Multi-Window Support**: 26 slots (a-z) for saving and focusing multiple windows
+- **Window Management**: Minimize, maximize, fullscreen, center, and move windows between monitors
+- **Directional Focus**: Navigate windows by direction (left, right, up, down)
 - **Global Hotkeys**: Register and focus windows from anywhere in macOS
 - **macOS Notifications**: Visual feedback for window registration and focus actions
 - **Menu Bar App**: Optional status bar icon for quick access
 - **CLI Support**: Use from the command line for scripting
 - **Persistence**: Saved windows survive app restarts
 - **Lightweight**: Minimal resource usage
-- **Configurable Hotkeys**: Customize the leader key via config file
+- **Configurable Hotkeys**: Customize the leader key and all keybinds via config file
 - **Auto-start**: Optionally launch Pixie at login
 
 ## Installation
@@ -61,6 +63,27 @@ Pixie uses a leader key system. Press **⌘⇧A** (Cmd+Shift+A) to enter leader 
 **Examples:**
 - `⌘⇧A` then `f` → Focus window at slot 'f'
 - `⌘⇧A` then `Shift+m` → Register current window to slot 'm'
+
+### Window Management Actions
+
+Pixie provides window manipulation actions that can be bound to keys in your config:
+
+| Action | Description |
+|--------|-------------|
+| `minimize` | Minimize the focused window |
+| `maximize` | Maximize the focused window (fill screen without fullscreen mode) |
+| `fullscreen` | Toggle fullscreen mode for the focused window |
+| `center` | Center the focused window on screen |
+| `move_monitor_left` | Move window to the monitor on the left |
+| `move_monitor_right` | Move window to the monitor on the right |
+| `move_monitor_up` | Move window to the monitor above |
+| `move_monitor_down` | Move window to the monitor below |
+| `focus_left` | Focus the window to the left |
+| `focus_right` | Focus the window to the right |
+| `focus_up` | Focus the window above |
+| `focus_down` | Focus the window below |
+
+These actions have no default shortcuts. Configure them in your `config.toml` under `[keybinds]`.
 
 ### CLI Commands
 
@@ -128,6 +151,29 @@ autostart = false
 
 # Leader mode timeout in seconds (how long to wait for a letter key after pressing leader)
 timeout = 2
+
+[keybinds]
+# Directional focus (works in leader mode)
+"leader+h" = "focus_left"
+"leader+l" = "focus_right"
+"leader+j" = "focus_down"
+"leader+k" = "focus_up"
+
+# Window management (configure your own shortcuts)
+"leader+m" = "minimize"
+"leader+shift+m" = "maximize"
+"leader+f" = "fullscreen"
+"leader+c" = "center"
+
+# Move window between monitors (preserves relative position)
+"leader+left" = "move_monitor_left"
+"leader+right" = "move_monitor_right"
+"leader+up" = "move_monitor_up"
+"leader+down" = "move_monitor_down"
+
+# Direct keybinds (work without leader key)
+"cmd+ctrl+m" = "minimize"
+"cmd+ctrl+f" = "fullscreen"
 ```
 
 ### Leader Key Options
@@ -143,6 +189,22 @@ timeout = 2
 - Numbers: `0` through `9`
 - Function keys: `f1` through `f12`
 - Special keys: `space`, `escape` (or `esc`), `enter` (or `return`), `tab`, `backspace`, `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`
+
+### Keybind Format
+
+Keybinds use the format `"modifiers+key" = "action"`:
+
+- **Leader keybinds**: Prefix with `leader+` (e.g., `"leader+m"` means press leader key then `m`)
+- **Direct keybinds**: No prefix (e.g., `"cmd+ctrl+m"` works globally without leader mode)
+- **Shift modifier**: Use `shift+` for uppercase (e.g., `"leader+shift+m"`)
+
+### Monitor Movement
+
+The `move_monitor_*` actions preserve the window's relative position when moving between monitors. For example, if a window is centered on one monitor, it will be centered on the destination monitor. This works by:
+
+1. Calculating the window's position as a percentage of the current screen
+2. Applying that same percentage to the target monitor
+3. Resizing proportionally if monitors have different resolutions
 
 ### Example Configurations
 

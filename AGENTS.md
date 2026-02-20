@@ -1,13 +1,15 @@
 # AGENTS
 
 ## Project Overview
-- Pixie is a macOS window focus tool written in Rust.
+- Pixie is a macOS window management tool written in Rust.
 - Features a leader key system for keyboard-driven window management with multi-window support.
+- Includes window manipulation actions: minimize, maximize, fullscreen, center, and monitor movement.
 - Main entrypoint: `src/main.rs`.
 - Accessibility/window logic: `src/accessibility.rs` and `src/window.rs`.
 - Leader key state machine: `src/leader_mode.rs`.
 - Hotkey management: `src/hotkey.rs`.
 - Notification system: `src/notification.rs`.
+- Configuration: `src/config.rs` defines the `Action` enum and parses keybinds.
 
 ## Development Commands
 - Run tests: `cargo test`
@@ -40,3 +42,7 @@
 - Multi-window storage uses `HashMap<char, SavedWindow>` for saving/focusing windows by slot key.
 - Persistence file: `saved_windows.json` in the user's config directory.
 - Notification system uses `osascript` to display macOS notifications.
+- The `Action` enum in `config.rs` defines all available actions: focus_*, minimize, maximize, fullscreen, center, move_monitor_*.
+- Window manipulation functions are in `accessibility.rs`: `minimize_window`, `maximize_window`, `toggle_fullscreen`, `center_window`.
+- Monitor movement functions in `accessibility.rs`: `move_window_to_monitor`, `get_all_screens`, and `Screen` struct for monitor detection.
+- Move monitor logic preserves relative window position by calculating percentage-based coordinates across screens.

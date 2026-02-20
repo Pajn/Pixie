@@ -429,9 +429,9 @@ pub fn find_window_in_direction(
 ) -> Result<AXUIElement, PixieError> {
     use core_foundation::number::CFNumber;
     use core_graphics::window::{
-        create_description_from_array, create_window_list, kCGNullWindowID, kCGWindowLayer,
-        kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly, kCGWindowOwnerPID,
-        kCGWindowBounds,
+        create_description_from_array, create_window_list, kCGNullWindowID, kCGWindowBounds,
+        kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+        kCGWindowOwnerPID,
     };
 
     let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
@@ -524,7 +524,8 @@ pub fn find_window_in_direction(
 fn find_window_element_by_id(pid: i32, window_id: u32) -> Result<AXUIElement, PixieError> {
     let app_element = AXUIElement::application(pid);
 
-    let windows = app_element.windows()
+    let windows = app_element
+        .windows()
         .map_err(|e| PixieError::Accessibility(format!("Failed to get windows: {:?}", e)))?;
 
     for i in 0..windows.len() {
@@ -646,7 +647,8 @@ fn get_dict_f64(dict: &CFDictionary, key: &str) -> f64 {
             dict.as_concrete_TypeRef(),
             key_ptr,
             &mut value,
-        ) != 0 && !value.is_null()
+        ) != 0
+            && !value.is_null()
         {
             let cf_type = CFType::wrap_under_get_rule(value);
             cf_type
@@ -657,4 +659,360 @@ fn get_dict_f64(dict: &CFDictionary, key: &str) -> f64 {
             0.0
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Screen {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub is_main: bool,
+}
+
+pub fn get_screens() -> Result<Vec<Screen>, PixieError> {
+    use core_graphics::display::CGDisplay;
+
+    let display_ids = CGDisplay::active_displays().map_err(|e| {
+        PixieError::Accessibility(format!("Failed to get active displays: {:?}", e))
+    })?;
+
+    let screens: Vec<Screen> = display_ids
+        .into_iter()
+        .map(|id| {
+            let display = CGDisplay::new(id);
+            let bounds = display.bounds();
+            Screen {
+                x: bounds.origin.x,
+                y: bounds.origin.y,
+                width: bounds.size.width,
+                height: bounds.size.height,
+                is_main: display.is_main(),
+            }
+        })
+        .collect();
+
+    if screens.is_empty() {
+        return Err(PixieError::Accessibility(
+            "No active displays found".to_string(),
+        ));
+    }
+
+    Ok(screens)
+}
+
+pub fn get_screen_for_window(window_rect: &WindowRect) -> Result<Screen, PixieError> {
+    let screens = get_screens()?;
+
+    let window_center_x = window_rect.x + window_rect.width / 2.0;
+    let window_center_y = window_rect.y + window_rect.height / 2.0;
+
+    for screen in &screens {
+        if window_center_x >= screen.x
+            && window_center_x < screen.x + screen.width
+            && window_center_y >= screen.y
+            && window_center_y < screen.y + screen.height
+        {
+            return Ok(screen.clone());
+        }
+    }
+
+    let mut closest_screen = screens.first().cloned().unwrap();
+    let mut min_distance = f64::MAX;
+
+    for screen in &screens {
+        let screen_center_x = screen.x + screen.width / 2.0;
+        let screen_center_y = screen.y + screen.height / 2.0;
+        let distance = (window_center_x - screen_center_x).powi(2)
+            + (window_center_y - screen_center_y).powi(2);
+        if distance < min_distance {
+            min_distance = distance;
+            closest_screen = screen.clone();
+        }
+    }
+
+    Ok(closest_screen)
+}
+
+pub fn set_window_rect(
+    element: &AXUIElement,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), PixieError> {
+    use accessibility_sys::AXValueCreate;
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+
+    unsafe {
+        let position = CGPoint::new(x, y);
+        let position_rect = CGRect::new(&position, &CGSize::new(1.0, 1.0));
+        let position_value = AXValueCreate(
+            accessibility_sys::kAXValueTypeCGPoint,
+            &position as *const _ as *const _,
+        );
+        if position_value.is_null() {
+            return Err(PixieError::Accessibility(
+                "Failed to create AXValue for position".to_string(),
+            ));
+        }
+
+        let attr = CFString::new("AXPosition");
+        let result = AXUIElementSetAttributeValue(
+            element.as_concrete_TypeRef(),
+            attr.as_concrete_TypeRef(),
+            position_value as *const _,
+        );
+
+        core_foundation::base::CFRelease(position_value as *const _);
+
+        if result != 0 {
+            return Err(PixieError::Accessibility(format!(
+                "Failed to set window position: {}",
+                result
+            )));
+        }
+
+        let size = CGSize::new(width, height);
+        let size_value = AXValueCreate(
+            accessibility_sys::kAXValueTypeCGSize,
+            &size as *const _ as *const _,
+        );
+        if size_value.is_null() {
+            return Err(PixieError::Accessibility(
+                "Failed to create AXValue for size".to_string(),
+            ));
+        }
+
+        let attr = CFString::new("AXSize");
+        let result = AXUIElementSetAttributeValue(
+            element.as_concrete_TypeRef(),
+            attr.as_concrete_TypeRef(),
+            size_value as *const _,
+        );
+
+        core_foundation::base::CFRelease(size_value as *const _);
+
+        if result != 0 {
+            return Err(PixieError::Accessibility(format!(
+                "Failed to set window size: {}",
+                result
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn minimize_window(element: &AXUIElement) -> Result<(), PixieError> {
+    unsafe {
+        let attr = CFString::new("AXMinimized");
+        let value = CFBoolean::true_value();
+
+        let result = AXUIElementSetAttributeValue(
+            element.as_concrete_TypeRef(),
+            attr.as_concrete_TypeRef(),
+            value.as_CFTypeRef(),
+        );
+
+        if result != 0 {
+            return Err(PixieError::Accessibility(format!(
+                "Failed to minimize window: {}",
+                result
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn maximize_window(element: &AXUIElement) -> Result<(), PixieError> {
+    let window_rect = get_window_rect(element)?;
+    let screen = get_screen_for_window(&window_rect)?;
+
+    let menu_bar_height = if screen.is_main { 25.0 } else { 0.0 };
+
+    let dock_height = get_dock_height()?;
+
+    let available_x = screen.x;
+    let available_y = screen.y + menu_bar_height;
+    let available_width = screen.width;
+    let available_height = screen.height - menu_bar_height - dock_height;
+
+    set_window_rect(
+        element,
+        available_x,
+        available_y,
+        available_width,
+        available_height,
+    )
+}
+
+fn get_dock_height() -> Result<f64, PixieError> {
+    use std::process::Command;
+
+    let output = Command::new("defaults")
+        .args(["read", "com.apple.dock", "orientation"])
+        .output();
+
+    let orientation = match output {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Err(_) => "bottom".to_string(),
+    };
+
+    let autohide_output = Command::new("defaults")
+        .args(["read", "com.apple.dock", "autohide"])
+        .output();
+
+    let autohide = match autohide_output {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).trim() == "1",
+        Err(_) => false,
+    };
+
+    if autohide {
+        return Ok(0.0);
+    }
+
+    match orientation.as_str() {
+        "bottom" => Ok(80.0),
+        "left" | "right" => Ok(0.0),
+        _ => Ok(80.0),
+    }
+}
+
+pub fn toggle_fullscreen(element: &AXUIElement) -> Result<(), PixieError> {
+    let fullscreen_attr: AXAttribute<CFType> = AXAttribute::new(&CFString::new("AXFullScreen"));
+
+    let current_value = element
+        .attribute(&fullscreen_attr)
+        .map_err(|e| PixieError::Accessibility(format!("Failed to get AXFullScreen: {:?}", e)))?;
+
+    let is_fullscreen = current_value
+        .downcast::<CFBoolean>()
+        .map(|b| b == CFBoolean::true_value())
+        .unwrap_or(false);
+
+    let new_value = if is_fullscreen {
+        CFBoolean::false_value()
+    } else {
+        CFBoolean::true_value()
+    };
+
+    unsafe {
+        let attr = CFString::new("AXFullScreen");
+        let result = AXUIElementSetAttributeValue(
+            element.as_concrete_TypeRef(),
+            attr.as_concrete_TypeRef(),
+            new_value.as_CFTypeRef(),
+        );
+
+        if result != 0 {
+            return Err(PixieError::Accessibility(format!(
+                "Failed to toggle fullscreen: {}",
+                result
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn center_window(element: &AXUIElement) -> Result<(), PixieError> {
+    let window_rect = get_window_rect(element)?;
+    let screen = get_screen_for_window(&window_rect)?;
+
+    let menu_bar_height = if screen.is_main { 25.0 } else { 0.0 };
+
+    let available_x = screen.x;
+    let available_y = screen.y + menu_bar_height;
+    let available_width = screen.width;
+    let available_height = screen.height - menu_bar_height;
+
+    let new_x = available_x + (available_width - window_rect.width) / 2.0;
+    let new_y = available_y + (available_height - window_rect.height) / 2.0;
+
+    set_window_rect(element, new_x, new_y, window_rect.width, window_rect.height)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonitorDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+pub fn move_window_to_monitor(
+    element: &AXUIElement,
+    direction: MonitorDirection,
+) -> Result<(), PixieError> {
+    let window_rect = get_window_rect(element)?;
+    let current_screen = get_screen_for_window(&window_rect)?;
+    let screens = get_screens()?;
+
+    let target_screen = find_adjacent_screen(&current_screen, &screens, direction)?;
+
+    let rel_left = (window_rect.x - current_screen.x) / current_screen.width;
+    let rel_top = (window_rect.y - current_screen.y) / current_screen.height;
+    let rel_width = window_rect.width / current_screen.width;
+    let rel_height = window_rect.height / current_screen.height;
+
+    let new_x = target_screen.x + rel_left * target_screen.width;
+    let new_y = target_screen.y + rel_top * target_screen.height;
+    let new_width = rel_width * target_screen.width;
+    let new_height = rel_height * target_screen.height;
+
+    set_window_rect(element, new_x, new_y, new_width, new_height)
+}
+
+fn find_adjacent_screen(
+    current: &Screen,
+    screens: &[Screen],
+    direction: MonitorDirection,
+) -> Result<Screen, PixieError> {
+    let current_center_x = current.x + current.width / 2.0;
+    let current_center_y = current.y + current.height / 2.0;
+
+    let candidates: Vec<(f64, &Screen)> = screens
+        .iter()
+        .filter(|s| {
+            let is_different = (s.x - current.x).abs() > 1.0 || (s.y - current.y).abs() > 1.0;
+            is_different
+        })
+        .filter_map(|s| {
+            let screen_center_x = s.x + s.width / 2.0;
+            let screen_center_y = s.y + s.height / 2.0;
+
+            let dx = screen_center_x - current_center_x;
+            let dy = screen_center_y - current_center_y;
+
+            let is_in_direction = match direction {
+                MonitorDirection::Left => dx < 0.0 && dx.abs() > dy.abs(),
+                MonitorDirection::Right => dx > 0.0 && dx.abs() > dy.abs(),
+                MonitorDirection::Up => dy < 0.0 && dy.abs() > dx.abs(),
+                MonitorDirection::Down => dy > 0.0 && dy.abs() > dx.abs(),
+            };
+
+            if is_in_direction {
+                let distance = (dx * dx + dy * dy).sqrt();
+                Some((distance, s))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if let Some((_, screen)) = candidates
+        .iter()
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+    {
+        return Ok((*screen).clone());
+    }
+
+    let fallback = screens
+        .iter()
+        .find(|s| (s.x - current.x).abs() > 1.0 || (s.y - current.y).abs() > 1.0)
+        .cloned();
+
+    fallback.ok_or_else(|| PixieError::Accessibility("No adjacent monitor found".to_string()))
 }

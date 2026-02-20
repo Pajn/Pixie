@@ -164,26 +164,86 @@ fn handle_command(cmd: Commands, window_manager: &WindowManager) -> Result<()> {
 }
 
 fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
-    let direction = match action {
-        Action::FocusLeft => accessibility::Direction::Left,
-        Action::FocusRight => accessibility::Direction::Right,
-        Action::FocusUp => accessibility::Direction::Up,
-        Action::FocusDown => accessibility::Direction::Down,
-    };
+    match action {
+        Action::FocusLeft | Action::FocusRight | Action::FocusUp | Action::FocusDown => {
+            let direction = match action {
+                Action::FocusLeft => accessibility::Direction::Left,
+                Action::FocusRight => accessibility::Direction::Right,
+                Action::FocusUp => accessibility::Direction::Up,
+                Action::FocusDown => accessibility::Direction::Down,
+                _ => unreachable!(),
+            };
 
-    match accessibility::get_focused_window() {
-        Ok(focused_element) => match accessibility::get_window_rect(&focused_element) {
-            Ok(from_rect) => match accessibility::find_window_in_direction(&from_rect, direction) {
-                Ok(target_window) => {
-                    if let Err(e) = accessibility::focus_window(&target_window) {
-                        eprintln!("✗ Failed to focus window: {}", e);
+            match accessibility::get_focused_window() {
+                Ok(focused_element) => match accessibility::get_window_rect(&focused_element) {
+                    Ok(from_rect) => {
+                        match accessibility::find_window_in_direction(&from_rect, direction) {
+                            Ok(target_window) => {
+                                if let Err(e) = accessibility::focus_window(&target_window) {
+                                    eprintln!("✗ Failed to focus window: {}", e);
+                                }
+                            }
+                            Err(e) => eprintln!("✗ No window found {:?}: {}", direction, e),
+                        }
+                    }
+                    Err(e) => eprintln!("✗ Failed to get window rect: {}", e),
+                },
+                Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+            }
+        }
+        Action::Minimize => match accessibility::get_focused_window() {
+            Ok(element) => {
+                if let Err(e) = accessibility::minimize_window(&element) {
+                    eprintln!("✗ Failed to minimize window: {}", e);
+                }
+            }
+            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+        },
+        Action::Maximize => match accessibility::get_focused_window() {
+            Ok(element) => {
+                if let Err(e) = accessibility::maximize_window(&element) {
+                    eprintln!("✗ Failed to maximize window: {}", e);
+                }
+            }
+            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+        },
+        Action::Fullscreen => match accessibility::get_focused_window() {
+            Ok(element) => {
+                if let Err(e) = accessibility::toggle_fullscreen(&element) {
+                    eprintln!("✗ Failed to toggle fullscreen: {}", e);
+                }
+            }
+            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+        },
+        Action::Center => match accessibility::get_focused_window() {
+            Ok(element) => {
+                if let Err(e) = accessibility::center_window(&element) {
+                    eprintln!("✗ Failed to center window: {}", e);
+                }
+            }
+            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+        },
+        Action::MoveMonitorLeft
+        | Action::MoveMonitorRight
+        | Action::MoveMonitorUp
+        | Action::MoveMonitorDown => {
+            let direction = match action {
+                Action::MoveMonitorLeft => accessibility::MonitorDirection::Left,
+                Action::MoveMonitorRight => accessibility::MonitorDirection::Right,
+                Action::MoveMonitorUp => accessibility::MonitorDirection::Up,
+                Action::MoveMonitorDown => accessibility::MonitorDirection::Down,
+                _ => unreachable!(),
+            };
+
+            match accessibility::get_focused_window() {
+                Ok(element) => {
+                    if let Err(e) = accessibility::move_window_to_monitor(&element, direction) {
+                        eprintln!("✗ Failed to move window to monitor: {}", e);
                     }
                 }
-                Err(e) => eprintln!("✗ No window found {:?}: {}", direction, e),
-            },
-            Err(e) => eprintln!("✗ Failed to get window rect: {}", e),
-        },
-        Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+                Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+            }
+        }
     }
 }
 

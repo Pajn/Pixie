@@ -19,6 +19,14 @@ pub enum Action {
     FocusRight,
     FocusUp,
     FocusDown,
+    Minimize,
+    Maximize,
+    Fullscreen,
+    Center,
+    MoveMonitorLeft,
+    MoveMonitorRight,
+    MoveMonitorUp,
+    MoveMonitorDown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
