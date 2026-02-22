@@ -325,12 +325,9 @@ pub fn get_app_name(pid: i32) -> Result<String, PixieError> {
         return Ok(name.clone());
     }
 
-    let executable_path = match Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "comm="])
-        .output()
-    {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        Err(_) => {
+    let executable_path = match executable_path_for_pid(pid) {
+        Some(path) => path,
+        None => {
             let name = "Unknown".to_string();
             let cache = APP_NAME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
             if let Ok(mut cache) = cache.lock() {
@@ -403,6 +400,127 @@ pub fn get_app_name(pid: i32) -> Result<String, PixieError> {
     }
 
     Ok(resolved_name)
+}
+
+fn executable_path_for_pid(pid: i32) -> Option<String> {
+    use std::process::Command;
+
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let executable_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!executable_path.is_empty()).then_some(executable_path)
+}
+
+fn get_app_icon_path(pid: i32) -> Option<String> {
+    use std::path::Path;
+
+    let executable_path = executable_path_for_pid(pid)?;
+    let bundle_path = bundle_path_from_executable(&executable_path)?;
+    let resources_path = Path::new(&bundle_path).join("Contents").join("Resources");
+    if !resources_path.exists() {
+        return None;
+    }
+
+    let icon_name = read_bundle_icon_name(&bundle_path);
+    let icon_path = resolve_bundle_icon_path(&resources_path, icon_name.as_deref())?;
+    picker_compatible_icon_path(pid, &icon_path)
+}
+
+fn read_bundle_icon_name(bundle_path: &str) -> Option<String> {
+    use std::process::Command;
+
+    let output = Command::new("defaults")
+        .args(["read", &format!("{bundle_path}/Contents/Info"), "CFBundleIconFile"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let icon_name = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    if icon_name.is_empty() || icon_name == "(null)" {
+        None
+    } else {
+        Some(icon_name)
+    }
+}
+
+fn resolve_bundle_icon_path(
+    resources_path: &std::path::Path,
+    icon_name: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(icon_name) = icon_name {
+        let icon_name = icon_name.trim();
+        if !icon_name.is_empty() {
+            candidates.push(resources_path.join(icon_name));
+            let icon_path = std::path::Path::new(icon_name);
+            if icon_path.extension().is_none() {
+                candidates.push(resources_path.join(format!("{icon_name}.png")));
+                candidates.push(resources_path.join(format!("{icon_name}.icns")));
+            }
+        }
+    }
+
+    candidates.push(resources_path.join("AppIcon.png"));
+    candidates.push(resources_path.join("AppIcon.icns"));
+
+    if let Some(path) = candidates.into_iter().find(|path| path.exists()) {
+        return Some(path);
+    }
+
+    let mut fallback_icons = std::fs::read_dir(resources_path)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| matches!(ext, "png" | "icns"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    fallback_icons.sort();
+    fallback_icons.into_iter().next()
+}
+
+fn picker_compatible_icon_path(pid: i32, icon_path: &std::path::Path) -> Option<String> {
+    use std::process::Command;
+
+    let extension = icon_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+
+    if extension.as_deref() != Some("icns") {
+        return Some(icon_path.to_string_lossy().into_owned());
+    }
+
+    let output_dir = std::env::temp_dir().join("pixie-app-icons");
+    std::fs::create_dir_all(&output_dir).ok()?;
+    let output_path = output_dir.join(format!("pid-{pid}.png"));
+
+    if !output_path.exists() {
+        let status = Command::new("sips")
+            .args(["-s", "format", "png"])
+            .arg(icon_path)
+            .arg("--out")
+            .arg(&output_path)
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
+    }
+
+    Some(output_path.to_string_lossy().into_owned())
 }
 
 fn bundle_path_from_executable(executable_path: &str) -> Option<String> {
@@ -767,6 +885,7 @@ pub struct WindowEntry {
     pub window_id: u32,
     pub app_name: String,
     pub title: String,
+    pub app_icon_path: Option<String>,
     pub bounds: (f64, f64, f64, f64), // x, y, width, height
 }
 
@@ -839,6 +958,7 @@ fn get_picker_windows(screen: Option<&Screen>) -> Result<Vec<WindowEntry>, Pixie
     let window_number_key = CFString::new("kCGWindowNumber");
     let window_name_key = CFString::new("kCGWindowName");
     let mut app_name_cache = HashMap::<i32, String>::new();
+    let mut app_icon_cache = HashMap::<i32, Option<String>>::new();
     let mut ax_title_cache = HashMap::<i32, Option<HashMap<u32, String>>>::new();
 
     let mut windows = Vec::new();
@@ -948,6 +1068,10 @@ fn get_picker_windows(screen: Option<&Screen>) -> Result<Vec<WindowEntry>, Pixie
             window_id,
             app_name,
             title,
+            app_icon_path: app_icon_cache
+                .entry(pid)
+                .or_insert_with(|| get_app_icon_path(pid))
+                .clone(),
             bounds: (x, y, width, height),
         });
     }

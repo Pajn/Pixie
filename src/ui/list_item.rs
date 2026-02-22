@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, IntoElement, MouseButton,
     MouseMoveEvent, ParentElement, RenderOnce, Stateful, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    Window, div, px, rgba,
 };
 
 use crate::ui::Theme;
@@ -128,11 +128,12 @@ impl RenderOnce for ListItem {
             .items_center()
             .justify_between()
             .gap_2()
-            .h(px(40.0))
+            .h(px(36.0))
             .w_full()
-            .py_1()
             .px_3()
             .rounded_md()
+            .border_1()
+            .border_color(rgba(0x00000000))
             .text_color(theme.foreground);
 
         if is_selectable {
@@ -155,18 +156,24 @@ impl RenderOnce for ListItem {
         }
 
         if is_active {
-            item = item.bg(theme.primary);
+            item = item.bg(theme.selected);
         } else if self.secondary_selected {
             item = item.bg(theme.muted);
+        }
+        if self.secondary_selected {
+            item = item.border_color(theme.accent);
         }
 
         let mut content = div()
             .flex()
             .w_full()
             .items_center()
-            .justify_between()
             .gap_2()
-            .child(div().flex_1().children(self.children));
+            .child(div().flex_1().overflow_hidden().children(self.children));
+
+        if let Some(suffix) = self.suffix {
+            content = content.child(div().flex_none().child(suffix));
+        }
 
         if self.confirmed
             && let Some(icon) = self.check_icon
@@ -175,10 +182,6 @@ impl RenderOnce for ListItem {
         }
 
         item = item.child(content);
-
-        if let Some(suffix) = self.suffix {
-            item = item.child(suffix);
-        }
 
         item
     }

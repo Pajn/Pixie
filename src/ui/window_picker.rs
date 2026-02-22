@@ -1,11 +1,12 @@
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::{
     App, Bounds, Context, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
     KeyBinding, ParentElement, Render, Size, UniformListScrollHandle, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
-    div, prelude::*, px, uniform_list,
+    div, img, prelude::*, px, uniform_list,
 };
 
 use crate::accessibility::{
@@ -21,6 +22,7 @@ actions!(
 
 static WINDOW_PICKER_ACTIVE: AtomicBool = AtomicBool::new(false);
 const WINDOW_PICKER_KEY_CONTEXT: &str = "WindowPicker";
+const PICKER_WIDTH: f32 = 560.0;
 const PICKER_KEY_INPUTS: [(&str, PickerInput); 8] = [
     ("j", PickerInput::SelectDown),
     ("down", PickerInput::SelectDown),
@@ -301,31 +303,81 @@ impl Render for WindowList {
                                 let win = &windows[window_index];
                                 let is_focused = window_index == focused;
                                 let is_selected = selected.contains(&window_index);
+                                let icon = if let Some(icon_path) = &win.app_icon_path {
+                                    img(PathBuf::from(icon_path))
+                                        .w(px(16.0))
+                                        .h(px(16.0))
+                                        .rounded_sm()
+                                        .with_fallback({
+                                            let theme = theme;
+                                            move || {
+                                                div()
+                                                    .w(px(16.0))
+                                                    .h(px(16.0))
+                                                    .rounded_sm()
+                                                    .bg(theme.muted)
+                                                    .into_any_element()
+                                            }
+                                        })
+                                        .flex_none()
+                                        .into_any_element()
+                                } else {
+                                    div()
+                                        .w(px(16.0))
+                                        .h(px(16.0))
+                                        .rounded_sm()
+                                        .bg(theme.muted)
+                                        .flex_none()
+                                        .into_any_element()
+                                };
 
-                                ListItem::new(window_index)
-                                    .selected(is_selected)
-                                    .secondary_selected(is_focused && !is_selected)
-                                    .suffix(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.muted_foreground)
-                                            .child(win.app_name.clone()),
-                                    )
+                                div()
+                                    .py(px(2.0))
                                     .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.foreground)
-                                            .child(win.title.clone()),
+                                        ListItem::new(window_index)
+                                            .selected(is_selected)
+                                            .secondary_selected(is_focused)
+                                            .suffix(
+                                                div()
+                                                    .w(px(140.0))
+                                                    .flex_none()
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .text_sm()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(win.app_name.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .w_full()
+                                                    .child(icon)
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .overflow_hidden()
+                                                            .whitespace_nowrap()
+                                                            .text_ellipsis()
+                                                            .text_xs()
+                                                            .text_color(theme.foreground)
+                                                            .child(win.title.clone()),
+                                                    ),
+                                            ),
                                     )
                                     .into_any_element()
                             }
-                            None => ListItem::new("picker-group-separator")
-                                .separator()
+                            None => div()
+                                .py(px(2.0))
                                 .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child("Other monitors + minimized"),
+                                    ListItem::new("picker-group-separator").separator().child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child("Other monitors + minimized"),
+                                    ),
                                 )
                                 .into_any_element(),
                         }
@@ -389,7 +441,7 @@ impl Render for PickerContainer {
             .flex()
             .flex_col()
             .h(height)
-            .w(px(400.0))
+            .w(px(PICKER_WIDTH))
             .gap_1()
             .rounded_xl()
             .border_1()
@@ -763,7 +815,7 @@ pub fn show_window_picker(cx: &mut App) {
 
     let height = (row_count.min(10) as f32 * 40.0 + 60.0).max(160.0);
     let y_offset = ((current_screen.height - height as f64) / 2.0) as f32;
-    let x_center = (current_screen.x + (current_screen.width - 400.0) / 2.0) as f32;
+    let x_center = (current_screen.x + (current_screen.width - PICKER_WIDTH as f64) / 2.0) as f32;
     let y_center = (current_screen.y + y_offset as f64) as f32;
 
     let window_handle = cx.open_window(
@@ -772,7 +824,7 @@ pub fn show_window_picker(cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 gpui::Point::new(px(x_center), px(y_center)),
                 Size {
-                    width: px(400.0),
+                    width: px(PICKER_WIDTH),
                     height: px(height),
                 },
             ))),
