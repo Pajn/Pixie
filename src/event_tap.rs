@@ -4,13 +4,14 @@ use core_graphics::event::{
     CGEventType, EventField,
 };
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::config::{Action, KeyCode, Keybind, KeybindEntry, Modifiers};
 use crate::ui::{PickerInput, is_window_picker_active, picker_input_from_keycode};
 
 pub static IS_LISTENING: AtomicBool = AtomicBool::new(false);
 static LEADER_MODIFIERS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PICKER_REPEAT_COUNTER: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Debug, Clone)]
 pub enum EventTapAction {
@@ -58,10 +59,18 @@ impl EventTap {
                     vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
                     move |_, event_type, event| {
                         let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+                        let is_autorepeat =
+                            event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) == 1;
                         let flags = event.get_flags();
                         let mut new_event = event.clone();
 
-                        handler.handle_event(event_type, keycode, flags, &mut new_event);
+                        handler.handle_event(
+                            event_type,
+                            keycode,
+                            flags,
+                            is_autorepeat,
+                            &mut new_event,
+                        );
 
                         Some(new_event)
                     },
@@ -120,6 +129,7 @@ impl EventHandler {
         event_type: CGEventType,
         keycode: i64,
         flags: CGEventFlags,
+        is_autorepeat: bool,
         event: &mut core_graphics::event::CGEvent,
     ) {
         match event_type {
@@ -133,6 +143,23 @@ impl EventHandler {
             CGEventType::KeyDown => {
                 if is_window_picker_active() {
                     if let Some(input) = picker_input_from_keycode(keycode) {
+                        if is_autorepeat {
+                            match input {
+                                PickerInput::SelectDown | PickerInput::SelectUp => {
+                                    let repeat = PICKER_REPEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
+                                    if repeat % 2 != 0 {
+                                        event.set_type(CGEventType::Null);
+                                        return;
+                                    }
+                                }
+                                _ => {
+                                    event.set_type(CGEventType::Null);
+                                    return;
+                                }
+                            }
+                        } else {
+                            PICKER_REPEAT_COUNTER.store(0, Ordering::Relaxed);
+                        }
                         tracing::trace!(
                             "picker input from event tap: {:?} (keycode={})",
                             input,

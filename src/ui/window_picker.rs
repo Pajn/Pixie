@@ -9,8 +9,8 @@ use gpui::{
 };
 
 use crate::accessibility::{
-    WindowEntry, find_window_by_id, focus_window, get_focused_window, get_screens, get_window_rect,
-    get_windows_on_monitor, tile_windows_in_columns,
+    WindowEntry, find_window_by_id, focus_window, get_all_windows, get_focused_window, get_screens,
+    get_window_rect, tile_windows_in_columns,
 };
 use crate::ui::{ListItem, Theme};
 
@@ -94,6 +94,7 @@ fn picker_key_binding(key: &str, input: PickerInput) -> KeyBinding {
 #[derive(Default)]
 pub struct WindowPickerState {
     pub windows: Vec<WindowEntry>,
+    pub current_monitor_count: usize,
     pub focused_index: usize,
     pub selected_indices: Vec<usize>,
     pub previously_focused_window: Option<(i32, u32)>,
@@ -101,6 +102,43 @@ pub struct WindowPickerState {
 }
 
 impl Global for WindowPickerState {}
+
+fn has_secondary_group(state: &WindowPickerState) -> bool {
+    state.current_monitor_count > 0 && state.windows.len() > state.current_monitor_count
+}
+
+fn visual_row_count(state: &WindowPickerState) -> usize {
+    state.windows.len() + usize::from(has_secondary_group(state))
+}
+
+fn visual_index_to_window_index(
+    visual_index: usize,
+    current_monitor_count: usize,
+    separator_present: bool,
+) -> Option<usize> {
+    if !separator_present {
+        return Some(visual_index);
+    }
+    if visual_index == current_monitor_count {
+        return None;
+    }
+    if visual_index > current_monitor_count {
+        return Some(visual_index - 1);
+    }
+    Some(visual_index)
+}
+
+fn window_index_to_visual_index(
+    window_index: usize,
+    current_monitor_count: usize,
+    separator_present: bool,
+) -> usize {
+    if separator_present && window_index >= current_monitor_count {
+        window_index + 1
+    } else {
+        window_index
+    }
+}
 
 pub struct PickerContainer {
     list: Entity<WindowList>,
@@ -131,6 +169,9 @@ impl Render for WindowList {
         let theme = Theme::default();
         let windows = &state.windows;
         let focused_index = state.focused_index;
+        let current_monitor_count = state.current_monitor_count;
+        let separator_present = has_secondary_group(state);
+        let row_count = visual_row_count(state);
         let scroll_handle = self.scroll_handle.clone();
 
         if windows.is_empty() {
@@ -145,40 +186,62 @@ impl Render for WindowList {
                 .into_any();
         }
 
-        scroll_handle.scroll_to_item(focused_index, gpui::ScrollStrategy::Top);
+        let focused_visual_index =
+            window_index_to_visual_index(focused_index, current_monitor_count, separator_present);
+        scroll_handle.scroll_to_item(focused_visual_index, gpui::ScrollStrategy::Top);
 
         uniform_list(
             cx.entity().clone(),
             "window-list",
-            windows.len(),
+            row_count,
             move |_this, range: Range<usize>, _window, cx| {
                 let state = cx.global::<WindowPickerState>();
                 let theme = Theme::default();
                 let windows = &state.windows;
                 let focused = state.focused_index;
                 let selected = &state.selected_indices;
+                let current_monitor_count = state.current_monitor_count;
+                let separator_present = has_secondary_group(state);
 
                 range
                     .map(|i| {
-                        let win = &windows[i];
-                        let is_focused = i == focused;
-                        let is_selected = selected.contains(&i);
+                        match visual_index_to_window_index(
+                            i,
+                            current_monitor_count,
+                            separator_present,
+                        ) {
+                            Some(window_index) => {
+                                let win = &windows[window_index];
+                                let is_focused = window_index == focused;
+                                let is_selected = selected.contains(&window_index);
 
-                        ListItem::new(i)
-                            .selected(is_selected)
-                            .secondary_selected(is_focused && !is_selected)
-                            .suffix(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child(win.app_name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.foreground)
-                                    .child(win.title.clone()),
-                            )
+                                ListItem::new(window_index)
+                                    .selected(is_selected)
+                                    .secondary_selected(is_focused && !is_selected)
+                                    .suffix(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.muted_foreground)
+                                            .child(win.app_name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.foreground)
+                                            .child(win.title.clone()),
+                                    )
+                                    .into_any_element()
+                            }
+                            None => ListItem::new("picker-group-separator")
+                                .separator()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Other monitors + minimized"),
+                                )
+                                .into_any_element(),
+                        }
                     })
                     .collect::<Vec<_>>()
             },
@@ -193,9 +256,9 @@ impl Render for PickerContainer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::default();
         let state = cx.global::<WindowPickerState>();
-        let window_count = state.windows.len();
+        let row_count = visual_row_count(state);
 
-        let height = px((window_count.min(10) as f32 * 40.0 + 60.0).max(160.0));
+        let height = px((row_count.min(10) as f32 * 40.0 + 60.0).max(160.0));
 
         div()
             .flex()
@@ -374,10 +437,10 @@ pub fn show_window_picker(cx: &mut App) {
         },
     };
 
-    let windows = match get_windows_on_monitor(main_screen) {
+    let all_windows = match get_all_windows() {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("Failed to get windows: {}", e);
+            eprintln!("Failed to get all windows: {}", e);
             return;
         }
     };
@@ -391,7 +454,28 @@ pub fn show_window_picker(cx: &mut App) {
                 .map(|window_id| (window_rect.pid, window_id))
         });
 
-    let window_count = windows.len();
+    let mut current_monitor_windows = Vec::new();
+    let mut secondary_windows = Vec::new();
+    for window in all_windows {
+        let (x, y, width, height) = window.bounds;
+        let center_x = x + width / 2.0;
+        let center_y = y + height / 2.0;
+        if center_x >= main_screen.x
+            && center_x < main_screen.x + main_screen.width
+            && center_y >= main_screen.y
+            && center_y < main_screen.y + main_screen.height
+        {
+            current_monitor_windows.push(window);
+        } else {
+            secondary_windows.push(window);
+        }
+    }
+
+    let current_monitor_count = current_monitor_windows.len();
+    let mut windows = current_monitor_windows;
+    windows.extend(secondary_windows);
+
+    let row_count = windows.len() + usize::from(current_monitor_count > 0 && windows.len() > current_monitor_count);
     let selected_indices = if let Some((_, id)) = previously_focused_window
         && let Some(index) = windows.iter().position(|w| w.window_id == id)
     {
@@ -402,13 +486,14 @@ pub fn show_window_picker(cx: &mut App) {
 
     cx.set_global(WindowPickerState {
         windows,
+        current_monitor_count,
         focused_index: selected_indices.first().cloned().unwrap_or_default(),
         selected_indices,
         previously_focused_window,
         window_handle: None,
     });
 
-    let height = (window_count.min(10) as f32 * 40.0 + 60.0).max(160.0);
+    let height = (row_count.min(10) as f32 * 40.0 + 60.0).max(160.0);
     let y_offset = ((main_screen.height - height as f64) / 2.0) as f32;
     let x_center = (main_screen.x + (main_screen.width - 400.0) / 2.0) as f32;
     let y_center = (main_screen.y + y_offset as f64) as f32;
@@ -424,7 +509,7 @@ pub fn show_window_picker(cx: &mut App) {
                 },
             ))),
             window_background: WindowBackgroundAppearance::Blurred,
-            kind: WindowKind::Normal,
+            kind: WindowKind::PopUp,
             ..Default::default()
         },
         |window, cx| {

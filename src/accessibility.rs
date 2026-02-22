@@ -13,9 +13,13 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_graphics::window::CGWindowID;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::error::PixieError;
+
+static APP_NAME_CACHE: OnceLock<Mutex<HashMap<i32, String>>> = OnceLock::new();
 
 /// Test if the Accessibility API actually works (not just permissions check)
 pub fn test_api_access() -> Result<(), PixieError> {
@@ -314,47 +318,91 @@ pub fn get_app_name(pid: i32) -> Result<String, PixieError> {
     use std::path::Path;
     use std::process::Command;
 
+    if let Some(cache) = APP_NAME_CACHE.get()
+        && let Ok(cache) = cache.lock()
+        && let Some(name) = cache.get(&pid)
+    {
+        return Ok(name.clone());
+    }
+
     let executable_path = match Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "comm="])
         .output()
     {
         Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        Err(_) => return Ok("Unknown".to_string()),
+        Err(_) => {
+            let name = "Unknown".to_string();
+            let cache = APP_NAME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            if let Ok(mut cache) = cache.lock() {
+                cache.insert(pid, name.clone());
+            }
+            return Ok(name);
+        }
     };
 
     if executable_path.is_empty() {
-        return Ok("Unknown".to_string());
+        let name = "Unknown".to_string();
+        let cache = APP_NAME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(pid, name.clone());
+        }
+        return Ok(name);
     }
 
-    if let Some(bundle_path) = bundle_path_from_executable(&executable_path) {
+    let resolved_name = if let Some(bundle_path) = bundle_path_from_executable(&executable_path) {
         if let Ok(output) = Command::new("mdls")
             .args(["-name", "kMDItemDisplayName", "-raw", &bundle_path])
             .output()
         {
             let display_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if output.status.success() && !display_name.is_empty() && display_name != "(null)" {
-                return Ok(display_name);
+                display_name
+            } else if let Some(bundle_name) = Path::new(&bundle_path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+            {
+                bundle_name.to_string()
+            } else if let Some(binary_name) = Path::new(&executable_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+            {
+                binary_name.to_string()
+            } else {
+                executable_path.clone()
             }
-        }
-
-        if let Some(bundle_name) = Path::new(&bundle_path)
+        } else if let Some(bundle_name) = Path::new(&bundle_path)
             .file_stem()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
         {
-            return Ok(bundle_name.to_string());
+            bundle_name.to_string()
+        } else if let Some(binary_name) = Path::new(&executable_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+        {
+            binary_name.to_string()
+        } else {
+            executable_path.clone()
         }
-    }
-
-    if let Some(binary_name) = Path::new(&executable_path)
+    } else if let Some(binary_name) = Path::new(&executable_path)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
     {
-        return Ok(binary_name.to_string());
+        binary_name.to_string()
+    } else {
+        executable_path
+    };
+
+    let cache = APP_NAME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(pid, resolved_name.clone());
     }
 
-    Ok(executable_path)
+    Ok(resolved_name)
 }
 
 fn bundle_path_from_executable(executable_path: &str) -> Option<String> {
@@ -755,14 +803,29 @@ pub fn get_screens() -> Result<Vec<Screen>, PixieError> {
 
 /// Get all visible windows on a specific monitor
 pub fn get_windows_on_monitor(screen: &Screen) -> Result<Vec<WindowEntry>, PixieError> {
+    get_picker_windows(Some(screen))
+}
+
+/// Get all windows used by the picker (including off-screen/minimized)
+pub fn get_all_windows() -> Result<Vec<WindowEntry>, PixieError> {
+    get_picker_windows(None)
+}
+
+fn get_picker_windows(screen: Option<&Screen>) -> Result<Vec<WindowEntry>, PixieError> {
+    use std::collections::HashMap;
+
     use core_foundation::number::CFNumber;
     use core_graphics::window::{
         create_description_from_array, create_window_list, kCGNullWindowID, kCGWindowBounds,
         kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
-        kCGWindowOwnerPID,
+        kCGWindowOwnerName, kCGWindowOwnerPID,
     };
 
-    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let options = if screen.is_some() {
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
+    } else {
+        kCGWindowListExcludeDesktopElements
+    };
     let window_ids = create_window_list(options, kCGNullWindowID)
         .ok_or_else(|| PixieError::Accessibility("Failed to get window list".to_string()))?;
     let descriptions = create_description_from_array(window_ids).ok_or_else(|| {
@@ -771,8 +834,12 @@ pub fn get_windows_on_monitor(screen: &Screen) -> Result<Vec<WindowEntry>, Pixie
 
     let layer_key = unsafe { CFString::wrap_under_get_rule(kCGWindowLayer) };
     let owner_pid_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) };
+    let owner_name_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerName) };
     let bounds_key = unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) };
     let window_number_key = CFString::new("kCGWindowNumber");
+    let window_name_key = CFString::new("kCGWindowName");
+    let mut app_name_cache = HashMap::<i32, String>::new();
+    let mut ax_title_cache = HashMap::<i32, Option<HashMap<u32, String>>>::new();
 
     let mut windows = Vec::new();
 
@@ -828,21 +895,53 @@ pub fn get_windows_on_monitor(screen: &Screen) -> Result<Vec<WindowEntry>, Pixie
         let width = get_dict_f64(&bounds_dict, "Width");
         let height = get_dict_f64(&bounds_dict, "Height");
 
-        // Check if window is on the specified screen
-        let window_center_x = x + width / 2.0;
-        let window_center_y = y + height / 2.0;
+        if let Some(screen) = screen {
+            // Check if window is on the specified screen
+            let window_center_x = x + width / 2.0;
+            let window_center_y = y + height / 2.0;
 
-        if window_center_x < screen.x
-            || window_center_x >= screen.x + screen.width
-            || window_center_y < screen.y
-            || window_center_y >= screen.y + screen.height
-        {
+            if window_center_x < screen.x
+                || window_center_x >= screen.x + screen.width
+                || window_center_y < screen.y
+                || window_center_y >= screen.y + screen.height
+            {
+                continue;
+            }
+        }
+
+        if width <= 1.0 || height <= 1.0 {
             continue;
         }
 
         // Get app name and window title
-        let app_name = get_app_name(pid).unwrap_or_else(|_| "Unknown".to_string());
-        let title = get_window_title_for_entry(pid, window_id).unwrap_or_default();
+        let app_name = window_desc
+            .find(&owner_name_key)
+            .and_then(|v| v.downcast::<CFString>())
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| {
+                app_name_cache
+                    .entry(pid)
+                    .or_insert_with(|| get_app_name(pid).unwrap_or_else(|_| "Unknown".to_string()))
+                    .clone()
+            });
+
+        let cg_title = window_desc
+            .find(&window_name_key)
+            .and_then(|v| v.downcast::<CFString>())
+            .map(|t| t.to_string())
+            .filter(|t| !t.trim().is_empty());
+        let title = if let Some(title) = cg_title {
+            title
+        } else {
+            let titles = ax_title_cache
+                .entry(pid)
+                .or_insert_with(|| get_window_titles_for_pid(pid).ok());
+            match titles.as_ref().and_then(|map| map.get(&window_id)).cloned() {
+                Some(title) => title,
+                None => continue,
+            }
+        };
 
         windows.push(WindowEntry {
             pid,
@@ -862,26 +961,24 @@ pub fn get_windows_on_monitor(screen: &Screen) -> Result<Vec<WindowEntry>, Pixie
     Ok(windows)
 }
 
-/// Get window title from PID and window ID
-fn get_window_title_for_entry(pid: i32, window_id: u32) -> Result<String, PixieError> {
+fn get_window_titles_for_pid(pid: i32) -> Result<std::collections::HashMap<u32, String>, PixieError> {
     let app_element = AXUIElement::application(pid);
 
     let windows = app_element
         .windows()
         .map_err(|e| PixieError::Accessibility(format!("Failed to get windows: {:?}", e)))?;
 
+    let mut titles = std::collections::HashMap::new();
     for i in 0..windows.len() {
         if let Some(win) = windows.get(i) {
             let win = win.clone();
-            if let Ok(win_id) = get_window_id(&win)
-                && win_id == window_id
-            {
-                return Ok(win.title().map(|s| s.to_string()).unwrap_or_default());
+            if let Ok(win_id) = get_window_id(&win) {
+                titles.insert(win_id, win.title().map(|s| s.to_string()).unwrap_or_default());
             }
         }
     }
 
-    Ok(String::new())
+    Ok(titles)
 }
 
 pub fn get_screen_for_window(window_rect: &WindowRect) -> Result<Screen, PixieError> {
@@ -1265,4 +1362,39 @@ pub fn tile_windows_in_columns(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::get_all_windows;
+
+    #[test]
+    #[ignore]
+    fn benchmark_get_all_windows() {
+        let runs = 10;
+        let mut durations_ms = Vec::with_capacity(runs);
+        let mut total_windows = 0usize;
+
+        for _ in 0..runs {
+            let started = Instant::now();
+            let windows = get_all_windows().expect("get_all_windows failed");
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            total_windows += windows.len();
+            durations_ms.push(elapsed_ms);
+        }
+
+        durations_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min = durations_ms[0];
+        let median = durations_ms[durations_ms.len() / 2];
+        let max = durations_ms[durations_ms.len() - 1];
+        let avg = durations_ms.iter().sum::<f64>() / durations_ms.len() as f64;
+        let avg_windows = total_windows as f64 / runs as f64;
+
+        println!(
+            "get_all_windows benchmark: runs={} avg={:.2}ms median={:.2}ms min={:.2}ms max={:.2}ms avg_windows={:.1}",
+            runs, avg, median, min, max, avg_windows
+        );
+    }
 }

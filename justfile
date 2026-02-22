@@ -34,3 +34,7 @@ signed-app: app sign
 # Install cargo-bundle if not already installed
 install-bundler:
     cargo install cargo-bundle
+
+# Benchmark picker window enumeration latency
+bench-picker:
+    cargo test benchmark_get_all_windows -- --ignored --nocapture
