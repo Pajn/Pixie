@@ -650,6 +650,10 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                                 }
                                 Err(e) => {
                                     eprintln!("Warning: Failed to reload config: {}", e);
+                                    notification::notify(
+                                        "Pixie",
+                                        &format!("Config reload failed: {}", e),
+                                    );
                                 }
                             }
                         }
@@ -912,6 +916,7 @@ fn run_headless_only(
                         }
                         Err(e) => {
                             eprintln!("Warning: Failed to reload config: {}", e);
+                            notification::notify("Pixie", &format!("Config reload failed: {}", e));
                         }
                     }
                 }

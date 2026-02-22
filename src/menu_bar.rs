@@ -322,7 +322,6 @@ fn open_config_in_editor() -> Result<()> {
         })?;
 
     let status = Command::new("open")
-        .arg("-t")
         .arg(&path)
         .status()
         .map_err(|e| PixieError::Config(format!("Failed to run open command: {}", e)))?;
