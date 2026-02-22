@@ -20,7 +20,7 @@ impl Default for Theme {
         let accent =
             rgb(*SYSTEM_ACCENT_HEX.get_or_init(|| system_accent_hex().unwrap_or(0x60a5fa)));
         Self {
-            background: rgba(0x11131866),
+            background: rgba(0x111318AC),
             foreground: rgb(0xffffff),
             selected: rgba(0xffffff30),
             muted: rgba(0xffffff1f),
