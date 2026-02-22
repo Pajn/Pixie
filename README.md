@@ -7,6 +7,7 @@ A lightweight macOS window management tool with global shortcuts and multi-windo
 - **Leader Key System**: ⌘⇧A activates leader mode for quick window operations
 - **Multi-Window Support**: 26 slots (a-z) for saving and focusing multiple windows
 - **Window Management**: Minimize, maximize, fullscreen, center, and move windows between monitors
+- **Window Picker (GPUI)**: Interactive picker UI for selecting/tile multiple windows
 - **Directional Focus**: Navigate windows by direction (left, right, up, down)
 - **Global Hotkeys**: Register and focus windows from anywhere in macOS
 - **macOS Notifications**: Visual feedback for window registration and focus actions
@@ -82,9 +83,26 @@ Pixie provides window manipulation actions that can be bound to keys in your con
 | `focus_right` | Focus the window to the right |
 | `focus_up` | Focus the window above |
 | `focus_down` | Focus the window below |
+| `tile` | Open the window picker and tile selected windows on the current monitor |
 | `place_<name>` | Place window using a builtin or custom placement |
 
 These actions have no default shortcuts. Configure them in your `config.toml` under `[keybinds]`.
+
+### Window Picker
+
+The `tile` action opens a GPUI-powered picker that lists windows on the current monitor first, then other-monitor/minimized windows.
+
+Default picker controls:
+- `j` / `k` (or arrow keys): Move focus
+- `space`: Toggle selection
+- `enter`: Tile selected windows
+- `esc`: Close picker
+
+Search controls (vim-style):
+- `/`: Enter search input mode
+- Type to filter by app name/title
+- `enter` / `esc`: Exit search input mode
+- `n` / `N`: Jump to next/previous match
 
 ### Builtin Placements
 
@@ -217,6 +235,7 @@ timeout = 2
 "leader+shift+m" = "maximize"
 "leader+f" = "fullscreen"
 "leader+c" = "center"
+"leader+t" = "tile"
 
 # Builtin placements
 "leader+h" = "place_left"
