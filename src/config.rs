@@ -4,8 +4,9 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -234,6 +235,48 @@ fn config_path() -> PathBuf {
     path.push("pixie");
     path.push("config.toml");
     path
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigFileState {
+    exists: bool,
+    modified: Option<SystemTime>,
+}
+
+fn read_file_state(path: &Path) -> ConfigFileState {
+    match fs::metadata(path) {
+        Ok(metadata) => ConfigFileState {
+            exists: true,
+            modified: metadata.modified().ok(),
+        },
+        Err(_) => ConfigFileState {
+            exists: false,
+            modified: None,
+        },
+    }
+}
+
+pub struct ConfigWatcher {
+    path: PathBuf,
+    last_state: ConfigFileState,
+}
+
+impl ConfigWatcher {
+    pub fn new() -> Self {
+        let path = config_path();
+        let last_state = read_file_state(&path);
+        Self { path, last_state }
+    }
+
+    pub fn poll_changed(&mut self) -> Option<Result<Config>> {
+        let current_state = read_file_state(&self.path);
+        if current_state == self.last_state {
+            return None;
+        }
+
+        self.last_state = current_state;
+        Some(load())
+    }
 }
 
 pub fn load() -> Result<Config> {

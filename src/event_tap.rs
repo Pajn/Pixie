@@ -1,4 +1,5 @@
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
+use core_foundation::base::TCFType;
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, EventField,
@@ -113,6 +114,14 @@ impl EventTap {
             .map_err(|e| format!("Event tap thread crashed: {:?}", e))??;
 
         Ok(Self { runloop })
+    }
+}
+
+impl Drop for EventTap {
+    fn drop(&mut self) {
+        unsafe {
+            core_foundation_sys::runloop::CFRunLoopStop(self.runloop.as_concrete_TypeRef());
+        }
     }
 }
 

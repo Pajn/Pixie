@@ -16,6 +16,7 @@ use cocoa::base::nil;
 use gpui::AssetSource;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 struct EmptyAssets;
 impl AssetSource for EmptyAssets {
@@ -286,36 +287,57 @@ fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
     }
 }
 
+fn apply_autostart_setting(enabled: bool) {
+    if enabled && !config::is_autostart_enabled() {
+        if let Err(e) = config::set_autostart(true) {
+            eprintln!("Warning: Failed to enable autostart: {}", e);
+        }
+    } else if !enabled
+        && config::is_autostart_enabled()
+        && let Err(e) = config::set_autostart(false)
+    {
+        eprintln!("Warning: Failed to disable autostart: {}", e);
+    }
+}
+
+fn runtime_bindings(cfg: &config::Config) -> (
+    config::Modifiers,
+    config::KeyCode,
+    Vec<config::KeybindEntry>,
+    Duration,
+) {
+    let (leader_modifiers, leader_keycode) = config::parse_leader_key(&cfg.leader_key)
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "Warning: Invalid leader key '{}': {}. Falling back to cmd+shift+a.",
+                cfg.leader_key, e
+            );
+            (
+                Some(config::Modifiers::SUPER | config::Modifiers::SHIFT),
+                config::KeyCode::KeyA,
+            )
+        });
+    let keybinds = cfg.parsed_keybinds();
+    if keybinds.len() != cfg.keybinds.len() {
+        eprintln!("Warning: Some keybinds are invalid and were ignored.");
+    }
+
+    (
+        leader_modifiers.unwrap_or(config::Modifiers::SUPER | config::Modifiers::SHIFT),
+        leader_keycode,
+        keybinds,
+        Duration::from_secs(cfg.timeout),
+    )
+}
+
 fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> {
     let config = config::load().unwrap_or_else(|e| {
         eprintln!("Error loading config: {}", e);
         eprintln!("Please fix your config file or remove it to use defaults.");
         std::process::exit(1);
     });
-
-    if config.autostart && !config::is_autostart_enabled() {
-        if let Err(e) = config::set_autostart(true) {
-            eprintln!("Warning: Failed to enable autostart: {}", e);
-        }
-    } else if !config.autostart
-        && config::is_autostart_enabled()
-        && let Err(e) = config::set_autostart(false)
-    {
-        eprintln!("Warning: Failed to disable autostart: {}", e);
-    }
-
-    let (leader_modifiers, leader_keycode) = config::parse_leader_key(&config.leader_key)
-        .unwrap_or_else(|_| {
-            (
-                Some(config::Modifiers::SUPER | config::Modifiers::SHIFT),
-                config::KeyCode::KeyA,
-            )
-        });
-
-    let leader_modifiers =
-        leader_modifiers.unwrap_or(config::Modifiers::SUPER | config::Modifiers::SHIFT);
-
-    let keybinds = config.parsed_keybinds();
+    apply_autostart_setting(config.autostart);
+    let (leader_modifiers, leader_keycode, keybinds, leader_timeout) = runtime_bindings(&config);
     let leader_keybinds: Vec<_> = keybinds
         .iter()
         .filter(|k| matches!(k.keybind, config::Keybind::LeaderPrefixed { .. }))
@@ -352,7 +374,13 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
 
     if headless {
         println!("Running in headless mode (Ctrl+C to quit)...");
-        run_headless_only(window_manager, leader_modifiers, leader_keycode, keybinds)?;
+        run_headless_only(
+            window_manager,
+            leader_modifiers,
+            leader_keycode,
+            keybinds,
+            leader_timeout,
+        )?;
         return Ok(());
     }
 
@@ -392,7 +420,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                 leader_modifiers,
                 leader_keycode,
                 keybinds.clone(),
-                event_sender,
+                event_sender.clone(),
             );
 
             if let Err(e) = &event_tap {
@@ -402,10 +430,10 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                 let _ = ui_sender.send(UiAction::Quit);
                 return;
             }
-            let _event_tap = event_tap.unwrap();
+            let mut event_tap = event_tap.unwrap();
 
             let leader_mode_controller = Arc::new(
-                LeaderModeController::with_timeout(std::time::Duration::from_secs(5))
+                LeaderModeController::with_timeout(leader_timeout)
                     .expect("Failed to create leader mode controller"),
             );
 
@@ -432,9 +460,14 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
             let controller = Arc::clone(&leader_mode_controller);
             let wm = Arc::clone(&wm_for_events);
             let ui_sender = ui_sender.clone();
+            let event_sender = event_sender.clone();
+            let mut watched_menubar_icon = menubar_enabled;
+            let mut watched_menubar_active_color = menubar_active_color.clone();
 
             std::thread::spawn(move || {
                 tracing::trace!("event tap thread started");
+                let mut config_watcher = config::ConfigWatcher::new();
+                let mut last_config_poll = Instant::now();
 
                 loop {
                     if !RUNNING.load(Ordering::SeqCst) {
@@ -555,6 +588,57 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                         }
                     }
 
+                    if last_config_poll.elapsed() >= Duration::from_millis(500) {
+                        last_config_poll = Instant::now();
+                        if let Some(reload) = config_watcher.poll_changed() {
+                            match reload {
+                                Ok(new_config) => {
+                                    let (
+                                        new_leader_modifiers,
+                                        new_leader_keycode,
+                                        new_keybinds,
+                                        new_timeout,
+                                    ) = runtime_bindings(&new_config);
+                                    match event_tap::EventTap::new(
+                                        new_leader_modifiers,
+                                        new_leader_keycode,
+                                        new_keybinds,
+                                        event_sender.clone(),
+                                    ) {
+                                        Ok(new_event_tap) => {
+                                            event_tap = new_event_tap;
+                                            controller.set_timeout(new_timeout);
+                                            apply_autostart_setting(new_config.autostart);
+                                            if new_config.menubar_icon != watched_menubar_icon
+                                                || new_config.menubar_active_color
+                                                    != watched_menubar_active_color
+                                            {
+                                                eprintln!(
+                                                    "Config updated: menubar changes apply after restart."
+                                                );
+                                            }
+                                            watched_menubar_icon = new_config.menubar_icon;
+                                            watched_menubar_active_color =
+                                                new_config.menubar_active_color.clone();
+                                            println!("↻ Reloaded config");
+                                            notification::notify("Pixie", "Config reloaded");
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Warning: Config changed but hotkeys were not reloaded: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Warning: Failed to reload config: {}", e);
+                                }
+                            }
+                        }
+                    }
+
+                    let _ = &event_tap;
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             });
@@ -644,10 +728,9 @@ fn run_headless_only(
     leader_modifiers: config::Modifiers,
     leader_keycode: config::KeyCode,
     keybinds: Vec<config::KeybindEntry>,
+    leader_timeout: Duration,
 ) -> Result<()> {
-    let leader_mode_controller = Arc::new(LeaderModeController::with_timeout(
-        std::time::Duration::from_secs(5),
-    )?);
+    let leader_mode_controller = Arc::new(LeaderModeController::with_timeout(leader_timeout)?);
 
     let (event_sender, mut event_receiver) =
         tokio::sync::mpsc::unbounded_channel::<EventTapAction>();
@@ -660,7 +743,7 @@ fn run_headless_only(
         leader_modifiers,
         leader_keycode,
         keybinds.clone(),
-        event_sender,
+        event_sender.clone(),
     );
 
     if let Err(e) = &event_tap {
@@ -669,12 +752,16 @@ fn run_headless_only(
         eprintln!("Please grant permissions and restart Pixie.");
         return Err(PixieError::EventTap(e.clone()));
     }
+    let mut event_tap = event_tap.unwrap();
 
     let controller_for_event = Arc::clone(&leader_mode_controller);
     let wm_for_events = Arc::clone(&window_manager);
     let leader_event_receiver = leader_mode_controller.events();
+    let event_sender = event_sender.clone();
 
     std::thread::spawn(move || {
+        let mut config_watcher = config::ConfigWatcher::new();
+        let mut last_config_poll = Instant::now();
         loop {
             if !RUNNING.load(Ordering::SeqCst) {
                 break;
@@ -766,6 +853,45 @@ fn run_headless_only(
                 }
             }
 
+            if last_config_poll.elapsed() >= Duration::from_millis(500) {
+                last_config_poll = Instant::now();
+                if let Some(reload) = config_watcher.poll_changed() {
+                    match reload {
+                        Ok(new_config) => {
+                            let (
+                                new_leader_modifiers,
+                                new_leader_keycode,
+                                new_keybinds,
+                                new_timeout,
+                            ) = runtime_bindings(&new_config);
+                            match event_tap::EventTap::new(
+                                new_leader_modifiers,
+                                new_leader_keycode,
+                                new_keybinds,
+                                event_sender.clone(),
+                            ) {
+                                Ok(new_event_tap) => {
+                                    event_tap = new_event_tap;
+                                    controller_for_event.set_timeout(new_timeout);
+                                    apply_autostart_setting(new_config.autostart);
+                                    println!("↻ Reloaded config");
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Warning: Config changed but hotkeys were not reloaded: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to reload config: {}", e);
+                        }
+                    }
+                }
+            }
+
+            let _ = &event_tap;
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     });

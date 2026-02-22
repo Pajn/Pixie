@@ -209,6 +209,7 @@ When running in menu bar mode, you can:
 ## Configuration
 
 Pixie can be configured via a TOML config file at `~/Library/Application Support/pixie/config.toml`.
+Pixie watches this file and applies `leader_key`, `timeout`, `autostart`, and `[keybinds]` changes automatically while running (menu bar icon/color changes still require a restart).
 
 ### Config File Example
 

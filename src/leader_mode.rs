@@ -1,6 +1,6 @@
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ pub struct LeaderModeController {
     event_receiver: Receiver<LeaderModeEvent>,
     event_sender: Sender<LeaderModeEvent>,
     is_listening: Arc<AtomicBool>,
-    timeout: Duration,
+    timeout_millis: Arc<AtomicU64>,
 }
 
 impl LeaderModeController {
@@ -32,12 +32,13 @@ impl LeaderModeController {
     pub fn with_timeout(timeout: Duration) -> Result<Self> {
         let (event_sender, event_receiver) = unbounded();
         let is_listening = Arc::new(AtomicBool::new(false));
+        let timeout_millis = Arc::new(AtomicU64::new(duration_to_millis(timeout)));
 
         Ok(LeaderModeController {
             event_receiver,
             event_sender,
             is_listening,
-            timeout,
+            timeout_millis,
         })
     }
 
@@ -46,13 +47,18 @@ impl LeaderModeController {
 
         let is_listening = Arc::clone(&self.is_listening);
         let sender = self.event_sender.clone();
-        let timeout = self.timeout;
+        let timeout_millis = Arc::clone(&self.timeout_millis);
         thread::spawn(move || {
-            thread::sleep(timeout);
+            thread::sleep(Duration::from_millis(timeout_millis.load(Ordering::SeqCst)));
             if is_listening.swap(false, Ordering::SeqCst) {
                 let _ = sender.send(LeaderModeEvent::Cancelled);
             }
         });
+    }
+
+    pub fn set_timeout(&self, timeout: Duration) {
+        self.timeout_millis
+            .store(duration_to_millis(timeout), Ordering::SeqCst);
     }
 
     pub fn handle_key(&self, key: char, shift: bool) {
@@ -101,4 +107,8 @@ impl LeaderModeController {
     pub fn is_listening(&self) -> bool {
         self.is_listening.load(Ordering::SeqCst)
     }
+}
+
+fn duration_to_millis(timeout: Duration) -> u64 {
+    timeout.as_millis().clamp(1, u128::from(u64::MAX)) as u64
 }
