@@ -396,15 +396,40 @@ pub fn get_app_name(pid: i32) -> Result<String, PixieError> {
 fn executable_path_for_pid(pid: i32) -> Option<String> {
     use std::process::Command;
 
-    let output = Command::new("ps")
+    let comm_output = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "comm="])
         .output()
         .ok()?;
-    if !output.status.success() {
+    if !comm_output.status.success() {
         return None;
     }
-    let executable_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!executable_path.is_empty()).then_some(executable_path)
+
+    let comm = String::from_utf8_lossy(&comm_output.stdout)
+        .trim()
+        .to_string();
+    if comm.contains(".app/") || comm.ends_with(".app") {
+        return Some(comm);
+    }
+
+    let command_output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-ww", "-o", "command="])
+        .output()
+        .ok()?;
+    if !command_output.status.success() {
+        return (!comm.is_empty()).then_some(comm);
+    }
+
+    let command = String::from_utf8_lossy(&command_output.stdout)
+        .trim()
+        .to_string();
+    if command.contains(".app/") || command.ends_with(".app") {
+        return Some(command);
+    }
+
+    if !comm.is_empty() {
+        return Some(comm);
+    }
+    (!command.is_empty()).then_some(command)
 }
 
 fn get_app_icon_path(pid: i32) -> Option<String> {
@@ -456,11 +481,15 @@ fn resolve_bundle_icon_path(
     if let Some(icon_name) = icon_name {
         let icon_name = icon_name.trim();
         if !icon_name.is_empty() {
-            candidates.push(resources_path.join(icon_name));
             let icon_path = std::path::Path::new(icon_name);
-            if icon_path.extension().is_none() {
+            if let Some(ext) = icon_path.extension() {
+                if !ext.is_empty() {
+                    candidates.push(resources_path.join(icon_name));
+                }
+            } else {
                 candidates.push(resources_path.join(format!("{icon_name}.png")));
                 candidates.push(resources_path.join(format!("{icon_name}.icns")));
+                candidates.push(resources_path.join(icon_name));
             }
         }
     }
@@ -499,8 +528,11 @@ fn picker_compatible_icon_path(pid: i32, icon_path: &std::path::Path) -> Option<
     }
 
     let output_dir = std::env::temp_dir().join("pixie-app-icons");
-    std::fs::create_dir_all(&output_dir).ok()?;
-    let output_path = output_dir.join(format!("pid-{pid}.png"));
+    let output_path = if std::fs::create_dir_all(&output_dir).is_ok() {
+        output_dir.join(format!("pid-{pid}.png"))
+    } else {
+        std::env::temp_dir().join(format!("pixie-app-icon-{pid}.png"))
+    };
 
     if !output_path.exists() {
         let status = Command::new("sips")
