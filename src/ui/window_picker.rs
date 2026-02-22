@@ -145,6 +145,25 @@ pub struct PickerContainer {
     focus_handle: FocusHandle,
 }
 
+impl PickerContainer {
+    fn new(list: Entity<WindowList>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
+        let blur_handle = focus_handle.clone();
+        cx.on_blur(&blur_handle, window, |_this, window, cx| {
+            if !is_window_picker_active() {
+                return;
+            }
+            WINDOW_PICKER_ACTIVE.store(false, Ordering::SeqCst);
+            cx.update_global::<WindowPickerState, _>(|state, _| {
+                state.window_handle = None;
+            });
+            window.remove_window();
+        })
+        .detach();
+        Self { list, focus_handle }
+    }
+}
+
 impl Focusable for PickerContainer {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -514,10 +533,7 @@ pub fn show_window_picker(cx: &mut App) {
         },
         |window, cx| {
             let list = cx.new(|cx| WindowList::new(window, cx));
-            cx.new(|cx| PickerContainer {
-                list,
-                focus_handle: cx.focus_handle(),
-            })
+            cx.new(|cx| PickerContainer::new(list, window, cx))
         },
     );
 
