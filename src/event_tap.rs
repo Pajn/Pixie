@@ -186,6 +186,20 @@ impl EventHandler {
                     }
                     return;
                 }
+
+                if !is_listening && !is_autorepeat {
+                    for entry in &self.keybinds {
+                        if direct_keybind_matches(&entry.keybind, keycode, flags) {
+                            tracing::trace!("direct action triggered: {:?}", entry.action);
+                            let _ = self
+                                .sender
+                                .send(EventTapAction::ActionTriggered(entry.action.clone()));
+                            event.set_type(CGEventType::Null);
+                            return;
+                        }
+                    }
+                }
+
                 let mods_active = LEADER_MODIFIERS_ACTIVE.load(Ordering::SeqCst);
                 let is_leader_key = keycode == self.leader_keycode;
 
@@ -376,4 +390,26 @@ fn keycode_to_direction(keycode: i64) -> Option<crate::accessibility::Direction>
         126 => Some(crate::accessibility::Direction::Up),
         _ => None,
     }
+}
+
+fn direct_keybind_matches(keybind: &Keybind, keycode: i64, flags: CGEventFlags) -> bool {
+    let Keybind::Direct { modifiers, code } = keybind else {
+        return false;
+    };
+    if keycode_to_native(*code) != keycode {
+        return false;
+    }
+
+    direct_modifier_flags(flags)
+        == modifiers
+            .map(modifiers_to_cg_flags)
+            .unwrap_or_else(CGEventFlags::empty)
+}
+
+fn direct_modifier_flags(flags: CGEventFlags) -> CGEventFlags {
+    flags
+        & (CGEventFlags::CGEventFlagCommand
+            | CGEventFlags::CGEventFlagAlternate
+            | CGEventFlags::CGEventFlagShift
+            | CGEventFlags::CGEventFlagControl)
 }
