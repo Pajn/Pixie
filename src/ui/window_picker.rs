@@ -242,12 +242,14 @@ impl Focusable for PickerContainer {
 
 pub struct WindowList {
     scroll_handle: UniformListScrollHandle,
+    last_scrolled_visual_index: Option<usize>,
 }
 
 impl WindowList {
     pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
         Self {
             scroll_handle: UniformListScrollHandle::new(),
+            last_scrolled_visual_index: None,
         }
     }
 }
@@ -277,7 +279,10 @@ impl Render for WindowList {
 
         let focused_visual_index =
             window_index_to_visual_index(focused_index, current_monitor_count, separator_present);
-        scroll_handle.scroll_to_item(focused_visual_index, gpui::ScrollStrategy::Top);
+        if self.last_scrolled_visual_index != Some(focused_visual_index) {
+            scroll_handle.scroll_to_item(focused_visual_index, gpui::ScrollStrategy::Top);
+            self.last_scrolled_visual_index = Some(focused_visual_index);
+        }
 
         uniform_list(
             cx.entity().clone(),
@@ -316,6 +321,8 @@ impl Render for WindowList {
                                                     .h(px(16.0))
                                                     .rounded_sm()
                                                     .bg(theme.muted)
+                                                    .border_1()
+                                                    .border_color(theme.border)
                                                     .into_any_element()
                                             }
                                         })
@@ -327,6 +334,8 @@ impl Render for WindowList {
                                         .h(px(16.0))
                                         .rounded_sm()
                                         .bg(theme.muted)
+                                        .border_1()
+                                        .border_color(theme.border)
                                         .flex_none()
                                         .into_any_element()
                                 };
@@ -337,6 +346,12 @@ impl Render for WindowList {
                                         ListItem::new(window_index)
                                             .selected(is_selected)
                                             .secondary_selected(is_focused)
+                                            .on_mouse_enter(move |_ev, _window, cx| {
+                                                hover_focus(window_index, cx);
+                                            })
+                                            .on_click(move |_ev, _window, cx| {
+                                                click_select(window_index, cx);
+                                            })
                                             .suffix(
                                                 div()
                                                     .w(px(140.0))
@@ -358,6 +373,7 @@ impl Render for WindowList {
                                                     .child(
                                                         div()
                                                             .flex_1()
+                                                            .min_w(px(0.0))
                                                             .overflow_hidden()
                                                             .whitespace_nowrap()
                                                             .text_ellipsis()
@@ -659,6 +675,32 @@ fn select_up(cx: &mut App) {
             } else {
                 state.focused_index -= 1;
             }
+        }
+    });
+    refresh_window_list(cx);
+}
+
+fn hover_focus(index: usize, cx: &mut App) {
+    let state = cx.global::<WindowPickerState>();
+    if index >= state.windows.len() || state.focused_index == index {
+        return;
+    }
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        state.focused_index = index;
+    });
+    refresh_window_list(cx);
+}
+
+fn click_select(index: usize, cx: &mut App) {
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        if index >= state.windows.len() {
+            return;
+        }
+        state.focused_index = index;
+        if state.selected_indices.contains(&index) {
+            state.selected_indices.retain(|i| *i != index);
+        } else {
+            state.selected_indices.push(index);
         }
     });
     refresh_window_list(cx);

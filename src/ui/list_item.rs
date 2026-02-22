@@ -169,7 +169,13 @@ impl RenderOnce for ListItem {
             .w_full()
             .items_center()
             .gap_2()
-            .child(div().flex_1().overflow_hidden().children(self.children));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .children(self.children),
+            );
 
         if let Some(suffix) = self.suffix {
             content = content.child(div().flex_none().child(suffix));
