@@ -9,8 +9,8 @@ use gpui::{
 };
 
 use crate::accessibility::{
-    WindowEntry, find_window_by_id, focus_window, get_all_windows, get_focused_window, get_screens,
-    get_window_rect, tile_windows_in_columns,
+    WindowEntry, find_window_by_id, focus_window, get_all_windows, get_focused_window,
+    get_screen_for_window, get_screens, get_window_rect, tile_windows_in_columns,
 };
 use crate::ui::{ListItem, Theme};
 
@@ -686,17 +686,6 @@ pub fn show_window_picker(cx: &mut App) {
         }
     };
 
-    let main_screen = match screens.iter().find(|s| s.is_main) {
-        Some(s) => s,
-        None => match screens.first() {
-            Some(s) => s,
-            None => {
-                eprintln!("No screens found");
-                return;
-            }
-        },
-    };
-
     let all_windows = match get_all_windows() {
         Ok(w) => w,
         Err(e) => {
@@ -705,14 +694,28 @@ pub fn show_window_picker(cx: &mut App) {
         }
     };
 
-    let previously_focused_window = get_focused_window()
+    let focused_window_rect = get_focused_window()
         .ok()
-        .and_then(|window| get_window_rect(&window).ok())
-        .and_then(|window_rect| {
-            window_rect
-                .window_id
-                .map(|window_id| (window_rect.pid, window_id))
-        });
+        .and_then(|window| get_window_rect(&window).ok());
+
+    let previously_focused_window = focused_window_rect.as_ref().and_then(|window_rect| {
+        window_rect
+            .window_id
+            .map(|window_id| (window_rect.pid, window_id))
+    });
+
+    let current_screen = focused_window_rect
+        .as_ref()
+        .and_then(|window_rect| get_screen_for_window(window_rect).ok())
+        .or_else(|| screens.iter().find(|s| s.is_main).cloned())
+        .or_else(|| screens.first().cloned());
+    let current_screen = match current_screen {
+        Some(screen) => screen,
+        None => {
+            eprintln!("No screens found");
+            return;
+        }
+    };
 
     let mut current_monitor_windows = Vec::new();
     let mut secondary_windows = Vec::new();
@@ -720,10 +723,10 @@ pub fn show_window_picker(cx: &mut App) {
         let (x, y, width, height) = window.bounds;
         let center_x = x + width / 2.0;
         let center_y = y + height / 2.0;
-        if center_x >= main_screen.x
-            && center_x < main_screen.x + main_screen.width
-            && center_y >= main_screen.y
-            && center_y < main_screen.y + main_screen.height
+        if center_x >= current_screen.x
+            && center_x < current_screen.x + current_screen.width
+            && center_y >= current_screen.y
+            && center_y < current_screen.y + current_screen.height
         {
             current_monitor_windows.push(window);
         } else {
@@ -759,9 +762,9 @@ pub fn show_window_picker(cx: &mut App) {
     });
 
     let height = (row_count.min(10) as f32 * 40.0 + 60.0).max(160.0);
-    let y_offset = ((main_screen.height - height as f64) / 2.0) as f32;
-    let x_center = (main_screen.x + (main_screen.width - 400.0) / 2.0) as f32;
-    let y_center = (main_screen.y + y_offset as f64) as f32;
+    let y_offset = ((current_screen.height - height as f64) / 2.0) as f32;
+    let x_center = (current_screen.x + (current_screen.width - 400.0) / 2.0) as f32;
+    let y_center = (current_screen.y + y_offset as f64) as f32;
 
     let window_handle = cx.open_window(
         WindowOptions {
