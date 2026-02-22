@@ -187,6 +187,7 @@ When running in menu bar mode, you can:
 
 - Click the 🧚 icon to see options
 - View all saved windows by slot
+- See the icon highlight while leader mode is active
 - Register current window to a slot
 - Focus a saved window
 - Clear slots
@@ -222,6 +223,13 @@ autostart = false
 
 # Leader mode timeout in seconds (how long to wait for a letter key after pressing leader)
 timeout = 2
+
+# Show Pixie in the macOS menu bar
+menubar_icon = true
+
+# Optional leader-mode icon color (#RRGGBB).
+# If omitted, Pixie uses your macOS System Settings accent color.
+# menubar_active_color = "#3b82f6"
 
 [keybinds]
 # Directional focus (works in leader mode)

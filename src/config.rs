@@ -163,6 +163,12 @@ pub struct Config {
 
     #[serde(default)]
     pub placements: HashMap<String, Placement>,
+
+    #[serde(default = "default_menubar_icon")]
+    pub menubar_icon: bool,
+
+    #[serde(default)]
+    pub menubar_active_color: Option<String>,
 }
 
 fn default_leader_key() -> String {
@@ -173,6 +179,10 @@ fn default_timeout() -> u64 {
     2
 }
 
+fn default_menubar_icon() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -181,6 +191,8 @@ impl Default for Config {
             timeout: default_timeout(),
             keybinds: HashMap::new(),
             placements: HashMap::new(),
+            menubar_icon: default_menubar_icon(),
+            menubar_active_color: None,
         }
     }
 }

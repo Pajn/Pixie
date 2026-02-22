@@ -359,6 +359,8 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
     enum UiAction {
         ShowWindowPicker,
         PickerInput(ui::PickerInput),
+        MenuBarRefresh,
+        MenuBarSetActive(bool),
         Quit,
     }
 
@@ -367,6 +369,8 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
         tokio::sync::mpsc::unbounded_channel::<EventTapAction>();
 
     let wm_for_events = Arc::clone(&window_manager);
+    let menubar_enabled = config.menubar_icon;
+    let menubar_active_color = config.menubar_active_color.clone();
 
     gpui::Application::new()
         .with_assets(EmptyAssets)
@@ -409,6 +413,21 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
 
             cx.set_global(WindowManagerState(wm_for_events.clone()));
 
+            let menu_bar_controller = if menubar_enabled {
+                match menu_bar::MenuBarController::new(
+                    wm_for_events.clone(),
+                    menubar_active_color.clone(),
+                ) {
+                    Ok(controller) => Some(controller),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to create menu bar icon: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             let leader_event_receiver = leader_mode_controller.events();
             let controller = Arc::clone(&leader_mode_controller);
             let wm = Arc::clone(&wm_for_events);
@@ -430,6 +449,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                                 EventTapAction::LeaderPressed => {
                                     controller.enter_listening_mode();
                                     notification::notify("Pixie", "Listening...");
+                                    let _ = ui_sender.send(UiAction::MenuBarSetActive(true));
                                 }
                                 EventTapAction::LeaderReleased => {}
                                 EventTapAction::KeyPressed(keycode, has_shift) => {
@@ -457,6 +477,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                     }
 
                     if let Ok(event) = leader_event_receiver.try_recv() {
+                        let mut refresh_menu = false;
                         match event {
                             LeaderModeEvent::RegisterSlot(c) => {
                                 let slot = c.to_ascii_lowercase();
@@ -472,6 +493,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                                     }
                                     Err(e) => eprintln!("✗ Failed: {}", e),
                                 }
+                                refresh_menu = true;
                             }
                             LeaderModeEvent::FocusSlot(c) => match wm.focus_saved_window(c) {
                                 Ok(window) => {
@@ -527,6 +549,10 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                                 }
                             }
                         }
+                        let _ = ui_sender.send(UiAction::MenuBarSetActive(false));
+                        if refresh_menu {
+                            let _ = ui_sender.send(UiAction::MenuBarRefresh);
+                        }
                     }
 
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -549,6 +575,22 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                         UiAction::PickerInput(input) => {
                             cx.update(|cx| {
                                 ui::handle_picker_input(input, cx);
+                            })
+                            .ok();
+                        }
+                        UiAction::MenuBarRefresh => {
+                            cx.update(|_| {
+                                if let Some(controller) = menu_bar_controller.as_ref() {
+                                    controller.refresh_menu();
+                                }
+                            })
+                            .ok();
+                        }
+                        UiAction::MenuBarSetActive(active) => {
+                            cx.update(|_| {
+                                if let Some(controller) = menu_bar_controller.as_ref() {
+                                    controller.set_leader_mode_active(active);
+                                }
                             })
                             .ok();
                         }
