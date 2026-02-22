@@ -2,6 +2,8 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use cocoa::appkit::NSApplication;
+use cocoa::base::nil;
 use gpui::{
     App, Bounds, Context, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
     KeyBinding, ParentElement, Render, Size, UniformListScrollHandle, Window,
@@ -11,7 +13,7 @@ use gpui::{
 
 use crate::accessibility::{
     WindowEntry, find_window_by_id, focus_window, get_all_windows, get_focused_window,
-    get_screen_for_window, get_screens, get_window_rect, tile_windows_in_columns,
+    get_screen_for_window, get_screens, get_window_rect, raise_window, tile_windows_in_columns,
 };
 use crate::ui::{ListItem, Theme};
 
@@ -51,6 +53,7 @@ pub fn init(cx: &mut App) {
             .iter()
             .map(|(key, input)| picker_key_binding(key, *input)),
     );
+    cx.set_global(WindowPickerState::default());
 }
 
 pub fn is_window_picker_active() -> bool {
@@ -168,6 +171,7 @@ pub struct WindowPickerState {
     pub search_matches: Vec<usize>,
     pub search_match_index: usize,
     pub previously_focused_window: Option<(i32, u32)>,
+    pub last_previewed_window: Option<(i32, u32)>,
     pub window_handle: Option<WindowHandle<PickerContainer>>,
 }
 
@@ -773,7 +777,16 @@ fn cancel(cx: &mut App) {
 }
 
 pub fn show_window_picker(cx: &mut App) {
-    WINDOW_PICKER_ACTIVE.store(false, Ordering::SeqCst);
+    show_window_picker_with_mode(cx, true);
+}
+
+pub fn show_window_picker_select(cx: &mut App) {
+    show_window_picker_with_mode(cx, false);
+}
+
+fn show_window_picker_with_mode(cx: &mut App, preselect_focused_window: bool) {
+    activate_pixie_app();
+    close_picker(cx);
     let screens = match get_screens() {
         Ok(s) => s,
         Err(e) => {
@@ -836,24 +849,31 @@ pub fn show_window_picker(cx: &mut App) {
 
     let row_count = windows.len()
         + usize::from(current_monitor_count > 0 && windows.len() > current_monitor_count);
-    let selected_indices = if let Some((_, id)) = previously_focused_window
+    let focused_window_index = if let Some((_, id)) = previously_focused_window
         && let Some(index) = windows.iter().position(|w| w.window_id == id)
     {
-        vec![index]
+        Some(index)
     } else {
-        vec![]
+        None
+    };
+    let focused_index = focused_window_index.unwrap_or_default();
+    let selected_indices = if preselect_focused_window {
+        focused_window_index.into_iter().collect()
+    } else {
+        Vec::new()
     };
 
     cx.set_global(WindowPickerState {
         windows,
         current_monitor_count,
-        focused_index: selected_indices.first().cloned().unwrap_or_default(),
+        focused_index,
         selected_indices,
         search_mode: false,
         search_query: String::new(),
         search_matches: Vec::new(),
         search_match_index: 0,
         previously_focused_window,
+        last_previewed_window: None,
         window_handle: None,
     });
 
@@ -873,7 +893,7 @@ pub fn show_window_picker(cx: &mut App) {
                 },
             ))),
             window_background: WindowBackgroundAppearance::Blurred,
-            kind: WindowKind::PopUp,
+            kind: WindowKind::Normal,
             ..Default::default()
         },
         |window, cx| {
@@ -889,6 +909,7 @@ pub fn show_window_picker(cx: &mut App) {
                 state.window_handle = Some(handle);
             });
             let _ = handle.update(cx, |container, window, _cx| {
+                activate_pixie_app();
                 window.activate_window();
                 window.focus(&container.focus_handle);
             });
@@ -903,6 +924,9 @@ pub fn show_window_picker(cx: &mut App) {
 fn close_picker(cx: &mut App) {
     WINDOW_PICKER_ACTIVE.store(false, Ordering::SeqCst);
     let window = cx.global::<WindowPickerState>().window_handle;
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        state.window_handle = None;
+    });
 
     if let Some(window) = window {
         let _ = window.update(cx, |_, window, _cx| {
@@ -912,11 +936,70 @@ fn close_picker(cx: &mut App) {
 }
 
 fn refresh_window_list(cx: &mut App) {
+    activate_pixie_app();
     let handle = cx.global::<WindowPickerState>().window_handle;
     if let Some(handle) = handle {
         let _ = handle.update(cx, |container, _window, cx| {
             container.list.update(cx, |_, cx| cx.notify());
         });
+    }
+    preview_focused_window(cx);
+}
+
+fn preview_focused_window(cx: &mut App) {
+    let (focused_window, selected_empty, last_previewed_window) = {
+        let state = cx.global::<WindowPickerState>();
+        (
+            state
+                .windows
+                .get(state.focused_index)
+                .map(|w| (w.pid, w.window_id)),
+            state.selected_indices.is_empty(),
+            state.last_previewed_window,
+        )
+    };
+
+    if !selected_empty {
+        cx.update_global::<WindowPickerState, _>(|state, _| {
+            state.last_previewed_window = None;
+        });
+        return;
+    }
+
+    let Some((pid, window_id)) = focused_window else {
+        return;
+    };
+
+    if Some((pid, window_id)) == last_previewed_window {
+        return;
+    }
+
+    if let Ok(window) = find_window_by_id(pid, window_id)
+        && let Err(e) = raise_window(&window)
+    {
+        eprintln!(
+            "Failed to raise focused picker preview window (pid={}, id={}): {}",
+            pid, window_id, e
+        );
+    }
+
+    let handle = cx.global::<WindowPickerState>().window_handle;
+    if let Some(handle) = handle {
+        let _ = handle.update(cx, |container, window, _cx| {
+            window.activate_window();
+            window.focus(&container.focus_handle);
+        });
+    }
+
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        state.last_previewed_window = Some((pid, window_id));
+    });
+}
+
+fn activate_pixie_app() {
+    unsafe {
+        let ns_app = NSApplication::sharedApplication(nil);
+        ns_app.activateIgnoringOtherApps_(true);
     }
 }
 

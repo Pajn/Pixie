@@ -295,7 +295,7 @@ fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
             }
             Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
         },
-        Action::Tile => {}
+        Action::Tile | Action::Select => {}
     }
 }
 
@@ -400,6 +400,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
 
     enum UiAction {
         ShowWindowPicker,
+        ShowSelectWindowPicker,
         PickerInput(ui::PickerInput),
         MenuBarRefresh,
         MenuBarSetActive(bool),
@@ -554,13 +555,15 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                             LeaderModeEvent::Cancelled => {
                                 notification::notify("Pixie", "Cancelled");
                             }
-                            LeaderModeEvent::KeybindAction(action) => {
-                                if matches!(action, Action::Tile) {
+                            LeaderModeEvent::KeybindAction(action) => match action {
+                                Action::Tile => {
                                     let _ = ui_sender.send(UiAction::ShowWindowPicker);
-                                } else {
-                                    handle_keybind_action(&action, &wm);
                                 }
-                            }
+                                Action::Select => {
+                                    let _ = ui_sender.send(UiAction::ShowSelectWindowPicker);
+                                }
+                                _ => handle_keybind_action(&action, &wm),
+                            },
                             LeaderModeEvent::FocusDirection(direction) => {
                                 match accessibility::get_focused_window() {
                                     Ok(focused_element) => {
@@ -667,6 +670,16 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                                     ns_app.activateIgnoringOtherApps_(true);
                                 }
                                 ui::show_window_picker(cx);
+                            })
+                            .ok();
+                        }
+                        UiAction::ShowSelectWindowPicker => {
+                            cx.update(|cx| {
+                                unsafe {
+                                    let ns_app = NSApplication::sharedApplication(nil);
+                                    ns_app.activateIgnoringOtherApps_(true);
+                                }
+                                ui::show_window_picker_select(cx);
                             })
                             .ok();
                         }

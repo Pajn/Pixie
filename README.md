@@ -84,13 +84,16 @@ Pixie provides window manipulation actions that can be bound to keys in your con
 | `focus_up` | Focus the window above |
 | `focus_down` | Focus the window below |
 | `tile` | Open the window picker and tile selected windows on the current monitor |
+| `select` | Open the window picker in focus-only mode (focused window is not preselected) |
 | `place_<name>` | Place window using a builtin or custom placement |
 
 These actions have no default shortcuts. Configure them in your `config.toml` under `[keybinds]`.
 
 ### Window Picker
 
-The `tile` action opens a GPUI-powered picker that lists windows on the current monitor first, then other-monitor/minimized windows.
+The `tile` and `select` actions open a GPUI-powered picker that lists windows on the current monitor first, then other-monitor/minimized windows.
+- `tile` starts with the currently focused window preselected.
+- `select` starts with the currently focused window only focused (no initial selection).
 
 Default picker controls:
 - `j` / `k` (or arrow keys): Move focus

@@ -149,7 +149,10 @@ impl EventHandler {
                 LEADER_MODIFIERS_ACTIVE.store(modifiers_active, Ordering::SeqCst);
             }
             CGEventType::KeyDown => {
-                if is_window_picker_active() {
+                let is_listening = IS_LISTENING.load(Ordering::SeqCst);
+                let is_leader_combo =
+                    flags.contains(self.leader_modifiers) && keycode == self.leader_keycode;
+                if is_window_picker_active() && !is_listening && !is_leader_combo {
                     let has_shift = flags.contains(CGEventFlags::CGEventFlagShift);
                     if let Some(input) = picker_input_from_keycode(keycode, has_shift) {
                         if is_autorepeat {
@@ -184,7 +187,6 @@ impl EventHandler {
                     return;
                 }
                 let mods_active = LEADER_MODIFIERS_ACTIVE.load(Ordering::SeqCst);
-                let is_listening = IS_LISTENING.load(Ordering::SeqCst);
                 let is_leader_key = keycode == self.leader_keycode;
 
                 // Check if this is the leader key combo (modifiers + leader key pressed together)

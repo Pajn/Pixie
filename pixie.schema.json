@@ -62,7 +62,8 @@
             "move_monitor_right",
             "move_monitor_up",
             "move_monitor_down",
-            "tile"
+            "tile",
+            "select"
           ],
           "description": "A built-in window management action."
         },
@@ -79,7 +80,9 @@
               "description": "The name of the placement to apply."
             }
           },
-          "required": ["place"]
+          "required": [
+            "place"
+          ]
         }
       ]
     },

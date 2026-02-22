@@ -298,6 +298,12 @@ pub fn focus_window(element: &AXUIElement) -> Result<(), PixieError> {
     Ok(())
 }
 
+pub fn raise_window(element: &AXUIElement) -> Result<(), PixieError> {
+    element
+        .perform_action(&CFString::new("AXRaise"))
+        .map_err(|e| PixieError::Accessibility(format!("Failed to raise window: {:?}", e)))
+}
+
 /// Get the application name from a PID
 pub fn get_app_name(pid: i32) -> Result<String, PixieError> {
     use std::path::Path;

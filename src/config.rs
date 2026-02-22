@@ -117,6 +117,7 @@ pub enum Action {
     Place(String),
     #[serde(rename = "tile")]
     Tile,
+    Select,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
