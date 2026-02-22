@@ -56,6 +56,9 @@ tokio = { version = "1", features = ["full"] }
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [profile.release]
 opt-level = 2
 lto = true
@@ -72,5 +75,4 @@ short_description = "macOS window focusing tool with global shortcuts"
 long_description = "Pixie is a macOS window focus tool with a leader key system for keyboard-driven window management"
 osx_minimum_system_version = "10.15"
 osx_info_plist_exts = ["Info.plist.ext"]
-
 

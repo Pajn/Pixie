@@ -34,7 +34,7 @@ use event_tap::EventTapAction;
 use leader_mode::{LeaderModeController, LeaderModeEvent};
 use window::WindowManager;
 
-struct WindowManagerState(pub Arc<WindowManager>);
+struct WindowManagerState;
 impl gpui::Global for WindowManagerState {}
 
 /// Pixie - macOS Window Focusing Tool
@@ -75,7 +75,7 @@ static RUNNING: AtomicBool = AtomicBool::new(true);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let args = Args::parse_from(std::env::args().filter(|arg| !arg.starts_with("-psn_")));
 
     let is_from_terminal = std::env::var("TERM_PROGRAM").is_ok();
     if is_from_terminal {
@@ -83,37 +83,49 @@ async fn main() -> Result<()> {
         println!("      try running as: open /Applications/Pixie.app\n");
     }
 
-    let mut attempts = 0;
-    loop {
-        match accessibility::test_api_access() {
-            Ok(()) => {
-                tracing::info!("Accessibility API working");
-                break;
-            }
-            Err(e) => {
-                if attempts == 0 {
-                    println!("\n⚠️  Accessibility API not available: {}", e);
-                    println!("\nSteps to fix:");
-                    println!("1. System Preferences → Privacy & Security → Accessibility");
-                    println!("2. Make sure Pixie.app is in the list AND CHECKED");
-                    println!("3. If running from Terminal, also add Terminal.app");
-                    println!("\nOpening System Preferences...\n");
-
-                    accessibility::request_accessibility_permissions();
-
-                    let _ = std::process::Command::new("open")
-                        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-                        .spawn();
+    if is_from_terminal {
+        let mut attempts = 0;
+        loop {
+            match accessibility::test_api_access() {
+                Ok(()) => {
+                    tracing::info!("Accessibility API working");
+                    break;
                 }
+                Err(e) => {
+                    if attempts == 0 {
+                        println!("\n⚠️  Accessibility API not available: {}", e);
+                        println!("\nSteps to fix:");
+                        println!("1. System Preferences → Privacy & Security → Accessibility");
+                        println!("2. Make sure Pixie.app is in the list AND CHECKED");
+                        println!("3. If running from Terminal, also add Terminal.app");
+                        println!("\nOpening System Preferences...\n");
 
-                attempts += 1;
-                if attempts % 5 == 0 {
-                    println!("Still waiting for permissions... (attempt {})", attempts);
+                        accessibility::request_accessibility_permissions();
+
+                        let _ = std::process::Command::new("open")
+                            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                            .spawn();
+                    }
+
+                    attempts += 1;
+                    if attempts % 5 == 0 {
+                        println!("Still waiting for permissions... (attempt {})", attempts);
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_secs(1));
                 }
-
-                std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }
+    } else if let Err(e) = accessibility::test_api_access() {
+        tracing::warn!(
+            "Accessibility API not ready at app launch: {}. Prompting and exiting for relaunch.",
+            e
+        );
+        accessibility::request_accessibility_permissions();
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+        return Ok(());
     }
 
     let window_manager = Arc::new(WindowManager::new()?);
@@ -300,7 +312,9 @@ fn apply_autostart_setting(enabled: bool) {
     }
 }
 
-fn runtime_bindings(cfg: &config::Config) -> (
+fn runtime_bindings(
+    cfg: &config::Config,
+) -> (
     config::Modifiers,
     config::KeyCode,
     Vec<config::KeybindEntry>,
@@ -439,7 +453,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
 
             ui::init(cx);
 
-            cx.set_global(WindowManagerState(wm_for_events.clone()));
+            cx.set_global(WindowManagerState);
 
             let menu_bar_controller = if menubar_enabled {
                 match menu_bar::MenuBarController::new(
@@ -484,7 +498,6 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                                     notification::notify("Pixie", "Listening...");
                                     let _ = ui_sender.send(UiAction::MenuBarSetActive(true));
                                 }
-                                EventTapAction::LeaderReleased => {}
                                 EventTapAction::KeyPressed(keycode, has_shift) => {
                                     if let Some(letter) = keycode_to_letter(keycode) {
                                         controller.handle_key(letter, has_shift);
@@ -775,7 +788,6 @@ fn run_headless_only(
                         notification::notify("Pixie", "Listening...");
                         println!("Listening...");
                     }
-                    EventTapAction::LeaderReleased => {}
                     EventTapAction::KeyPressed(keycode, has_shift) => {
                         if let Some(letter) = keycode_to_letter(keycode) {
                             controller_for_event.handle_key(letter, has_shift);

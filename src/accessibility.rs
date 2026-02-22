@@ -241,29 +241,14 @@ pub fn get_focused_window_with_retry(
 pub struct WindowInfo {
     pub pid: i32,
     pub title: String,
-    pub role: String,
-}
-
-impl WindowInfo {
-    pub fn display_string(&self) -> String {
-        let app_name = get_app_name(self.pid).unwrap_or_else(|_| "Unknown".to_string());
-        if self.title.is_empty() {
-            format!("{} (PID: {})", app_name, self.pid)
-        } else {
-            format!("{} - \"{}\" (PID: {})", app_name, self.title, self.pid)
-        }
-    }
 }
 
 /// Get information about a window element
 pub fn get_window_info(element: &AXUIElement) -> Result<WindowInfo, PixieError> {
     let title = element.title().map(|s| s.to_string()).unwrap_or_default();
-
-    let role = element.role().map(|s| s.to_string()).unwrap_or_default();
-
     let pid = get_pid(element)?;
 
-    Ok(WindowInfo { pid, title, role })
+    Ok(WindowInfo { pid, title })
 }
 
 /// Get the PID from an AXUIElement
@@ -435,7 +420,11 @@ fn read_bundle_icon_name(bundle_path: &str) -> Option<String> {
     use std::process::Command;
 
     let output = Command::new("defaults")
-        .args(["read", &format!("{bundle_path}/Contents/Info"), "CFBundleIconFile"])
+        .args([
+            "read",
+            &format!("{bundle_path}/Contents/Info"),
+            "CFBundleIconFile",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -589,7 +578,6 @@ pub struct WindowRect {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    pub element: AXUIElement,
     pub pid: i32,
     pub window_id: Option<u32>,
 }
@@ -627,7 +615,6 @@ pub fn get_window_rect(element: &AXUIElement) -> Result<WindowRect, PixieError> 
         y: rect.origin.y,
         width: rect.size.width,
         height: rect.size.height,
-        element: element.clone(),
         pid,
         window_id,
     })
@@ -850,7 +837,7 @@ fn get_dict_f64(dict: &CFDictionary, key: &str) -> f64 {
     let key = CFString::new(key);
     unsafe {
         let mut value: *const std::ffi::c_void = std::ptr::null();
-        let key_ptr = key.as_CFTypeRef() as *const std::ffi::c_void;
+        let key_ptr = key.as_CFTypeRef();
         if core_foundation::dictionary::CFDictionaryGetValueIfPresent(
             dict.as_concrete_TypeRef(),
             key_ptr,
@@ -918,11 +905,6 @@ pub fn get_screens() -> Result<Vec<Screen>, PixieError> {
     }
 
     Ok(screens)
-}
-
-/// Get all visible windows on a specific monitor
-pub fn get_windows_on_monitor(screen: &Screen) -> Result<Vec<WindowEntry>, PixieError> {
-    get_picker_windows(Some(screen))
 }
 
 /// Get all windows used by the picker (including off-screen/minimized)
@@ -1085,7 +1067,9 @@ fn get_picker_windows(screen: Option<&Screen>) -> Result<Vec<WindowEntry>, Pixie
     Ok(windows)
 }
 
-fn get_window_titles_for_pid(pid: i32) -> Result<std::collections::HashMap<u32, String>, PixieError> {
+fn get_window_titles_for_pid(
+    pid: i32,
+) -> Result<std::collections::HashMap<u32, String>, PixieError> {
     let app_element = AXUIElement::application(pid);
 
     let windows = app_element
@@ -1097,7 +1081,10 @@ fn get_window_titles_for_pid(pid: i32) -> Result<std::collections::HashMap<u32, 
         if let Some(win) = windows.get(i) {
             let win = win.clone();
             if let Ok(win_id) = get_window_id(&win) {
-                titles.insert(win_id, win.title().map(|s| s.to_string()).unwrap_or_default());
+                titles.insert(
+                    win_id,
+                    win.title().map(|s| s.to_string()).unwrap_or_default(),
+                );
             }
         }
     }
@@ -1318,23 +1305,6 @@ pub fn toggle_fullscreen(element: &AXUIElement) -> Result<(), PixieError> {
     }
 
     Ok(())
-}
-
-pub fn center_window(element: &AXUIElement) -> Result<(), PixieError> {
-    let window_rect = get_window_rect(element)?;
-    let screen = get_screen_for_window(&window_rect)?;
-
-    let menu_bar_height = if screen.is_main { 25.0 } else { 0.0 };
-
-    let available_x = screen.x;
-    let available_y = screen.y + menu_bar_height;
-    let available_width = screen.width;
-    let available_height = screen.height - menu_bar_height;
-
-    let new_x = available_x + (available_width - window_rect.width) / 2.0;
-    let new_y = available_y + (available_height - window_rect.height) / 2.0;
-
-    set_window_rect(element, new_x, new_y, window_rect.width, window_rect.height)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

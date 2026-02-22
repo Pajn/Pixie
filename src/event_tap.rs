@@ -1,5 +1,5 @@
-use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_foundation::base::TCFType;
+use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, EventField,
@@ -17,7 +17,6 @@ static PICKER_REPEAT_COUNTER: AtomicU8 = AtomicU8::new(0);
 #[derive(Debug, Clone)]
 pub enum EventTapAction {
     LeaderPressed,
-    LeaderReleased,
     KeyPressed(i64, bool),
     ActionTriggered(Action),
     ArrowPressed(crate::accessibility::Direction),
@@ -159,8 +158,9 @@ impl EventHandler {
                                 | PickerInput::SelectUp
                                 | PickerInput::SearchChar('j')
                                 | PickerInput::SearchChar('k') => {
-                                    let repeat = PICKER_REPEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
-                                    if repeat % 2 != 0 {
+                                    let repeat =
+                                        PICKER_REPEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
+                                    if !repeat.is_multiple_of(2) {
                                         event.set_type(CGEventType::Null);
                                         return;
                                     }

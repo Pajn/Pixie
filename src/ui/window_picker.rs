@@ -173,6 +173,8 @@ pub struct WindowPickerState {
 
 impl Global for WindowPickerState {}
 
+type WindowIdentity = (i32, u32);
+
 fn has_secondary_group(state: &WindowPickerState) -> bool {
     state.current_monitor_count > 0 && state.windows.len() > state.current_monitor_count
 }
@@ -313,18 +315,15 @@ impl Render for WindowList {
                                         .w(px(16.0))
                                         .h(px(16.0))
                                         .rounded_sm()
-                                        .with_fallback({
-                                            let theme = theme;
-                                            move || {
-                                                div()
-                                                    .w(px(16.0))
-                                                    .h(px(16.0))
-                                                    .rounded_sm()
-                                                    .bg(theme.muted)
-                                                    .border_1()
-                                                    .border_color(theme.border)
-                                                    .into_any_element()
-                                            }
+                                        .with_fallback(move || {
+                                            div()
+                                                .w(px(16.0))
+                                                .h(px(16.0))
+                                                .rounded_sm()
+                                                .bg(theme.muted)
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .into_any_element()
                                         })
                                         .flex_none()
                                         .into_any_element()
@@ -718,7 +717,10 @@ fn toggle_select(cx: &mut App) {
 }
 
 fn confirm(cx: &mut App) {
-    let (windows_to_tile, previously_focused_window): (Vec<(i32, u32)>, Option<(i32, u32)>) = {
+    let (windows_to_tile, previously_focused_window): (
+        Vec<WindowIdentity>,
+        Option<WindowIdentity>,
+    ) = {
         let state = cx.global::<WindowPickerState>();
         let indices = if state.selected_indices.is_empty() {
             vec![state.focused_index]

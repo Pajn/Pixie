@@ -12,7 +12,6 @@ pub struct Theme {
     pub muted: gpui::Rgba,
     pub muted_foreground: gpui::Rgba,
     pub border: gpui::Rgba,
-    pub primary: gpui::Rgba,
     pub accent: gpui::Rgba,
 }
 
@@ -27,7 +26,6 @@ impl Default for Theme {
             muted: rgba(0xffffff1f),
             muted_foreground: rgb(0xa0a8b4),
             border: rgb(0x2f3540),
-            primary: rgb(0x2b3442),
             accent,
         }
     }

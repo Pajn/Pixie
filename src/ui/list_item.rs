@@ -20,17 +20,17 @@ impl ListItemMode {
     }
 }
 
+type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type MouseMoveHandler = Box<dyn Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static>;
+
 #[derive(IntoElement)]
 pub struct ListItem {
     base: Stateful<Div>,
     mode: ListItemMode,
-    disabled: bool,
     selected: bool,
     secondary_selected: bool,
-    confirmed: bool,
-    check_icon: Option<AnyElement>,
-    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
-    on_mouse_enter: Option<Box<dyn Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static>>,
+    on_click: Option<ClickHandler>,
+    on_mouse_enter: Option<MouseMoveHandler>,
     suffix: Option<AnyElement>,
     children: Vec<AnyElement>,
 }
@@ -40,11 +40,8 @@ impl ListItem {
         Self {
             base: div().id(id.into()),
             mode: ListItemMode::Entry,
-            disabled: false,
             selected: false,
             secondary_selected: false,
-            confirmed: false,
-            check_icon: None,
             on_click: None,
             on_mouse_enter: None,
             suffix: None,
@@ -64,24 +61,6 @@ impl ListItem {
 
     pub fn secondary_selected(mut self, selected: bool) -> Self {
         self.secondary_selected = selected;
-        self
-    }
-
-    pub fn confirmed(mut self, confirmed: bool) -> Self {
-        self.confirmed = confirmed;
-        self
-    }
-
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-
-    pub fn check_icon<E>(mut self, icon: E) -> Self
-    where
-        E: IntoElement,
-    {
-        self.check_icon = Some(icon.into_any_element());
         self
     }
 
@@ -119,8 +98,8 @@ impl ParentElement for ListItem {
 impl RenderOnce for ListItem {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let theme = Theme::default();
-        let is_selectable = !(self.disabled || self.mode.is_separator());
-        let is_active = self.confirmed || self.selected;
+        let is_selectable = !self.mode.is_separator();
+        let is_active = self.selected;
 
         let mut item = self
             .base
@@ -164,27 +143,16 @@ impl RenderOnce for ListItem {
             item = item.border_color(theme.accent);
         }
 
-        let mut content = div()
-            .flex()
-            .w_full()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .children(self.children),
-            );
+        let mut content = div().flex().w_full().items_center().gap_2().child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .children(self.children),
+        );
 
         if let Some(suffix) = self.suffix {
             content = content.child(div().flex_none().child(suffix));
-        }
-
-        if self.confirmed
-            && let Some(icon) = self.check_icon
-        {
-            content = content.child(icon);
         }
 
         item = item.child(content);

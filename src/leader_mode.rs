@@ -25,6 +25,7 @@ pub struct LeaderModeController {
 }
 
 impl LeaderModeController {
+    #[allow(dead_code)]
     pub fn new() -> Result<Self> {
         Self::with_timeout(Duration::from_secs(2))
     }
@@ -74,6 +75,7 @@ impl LeaderModeController {
         let _ = self.event_sender.send(event);
     }
 
+    #[allow(dead_code)]
     pub fn cancel(&self) {
         if self.is_listening.swap(false, Ordering::SeqCst) {
             let _ = self.event_sender.send(LeaderModeEvent::Cancelled);
@@ -94,6 +96,7 @@ impl LeaderModeController {
             .send(LeaderModeEvent::FocusDirection(direction));
     }
 
+    #[allow(dead_code)]
     pub fn send_action(&self, action: Action) {
         let _ = self
             .event_sender
@@ -104,6 +107,7 @@ impl LeaderModeController {
         self.event_receiver.clone()
     }
 
+    #[allow(dead_code)]
     pub fn is_listening(&self) -> bool {
         self.is_listening.load(Ordering::SeqCst)
     }

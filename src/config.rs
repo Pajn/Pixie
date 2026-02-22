@@ -495,6 +495,19 @@ fn parse_key_code(s: &str) -> Result<KeyCode> {
         if c.is_ascii_digit() {
             return digit_to_code(c);
         }
+        return match c {
+            '=' => Ok(KeyCode::Equal),
+            '-' => Ok(KeyCode::Minus),
+            '[' => Ok(KeyCode::BracketLeft),
+            ']' => Ok(KeyCode::BracketRight),
+            '\\' => Ok(KeyCode::Backslash),
+            ';' => Ok(KeyCode::Semicolon),
+            '\'' => Ok(KeyCode::Quote),
+            ',' => Ok(KeyCode::Comma),
+            '.' => Ok(KeyCode::Period),
+            '/' => Ok(KeyCode::Slash),
+            _ => Err(PixieError::Config(format!("Unknown key: {}", s))),
+        };
     }
 
     if s.starts_with('f') || s.starts_with('F') {
@@ -586,7 +599,7 @@ const LAUNCH_AGENT_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <string>com.pixie</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/Pixie.app/Contents/MacOS/Pixie</string>
+        <string>/Applications/Pixie.app/Contents/MacOS/pixie</string>
         <string>--headless</string>
     </array>
     <key>RunAtLoad</key>

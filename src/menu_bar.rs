@@ -1,5 +1,7 @@
 //! Menu bar UI for Pixie
 
+#![allow(unexpected_cfgs)]
+
 use cocoa::appkit::{
     NSApp, NSButton, NSColor, NSCompositingOperation, NSImage, NSMenu, NSMenuItem, NSRectFill,
     NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
@@ -208,14 +210,19 @@ fn open_config_in_editor() -> Result<()> {
     let path = config::config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            PixieError::Config(format!("Failed to create config directory {:?}: {}", parent, e))
+            PixieError::Config(format!(
+                "Failed to create config directory {:?}: {}",
+                parent, e
+            ))
         })?;
     }
     OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
-        .map_err(|e| PixieError::Config(format!("Failed to create config file {:?}: {}", path, e)))?;
+        .map_err(|e| {
+            PixieError::Config(format!("Failed to create config file {:?}: {}", path, e))
+        })?;
 
     let status = Command::new("open")
         .arg("-t")

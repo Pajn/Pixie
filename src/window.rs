@@ -57,6 +57,7 @@ impl WindowManager {
     }
 
     /// Get a saved window by key
+    #[allow(dead_code)]
     pub fn get_saved_window(&self, key: char) -> Option<SavedWindow> {
         self.saved_windows.lock().unwrap().get(&key).cloned()
     }
@@ -209,7 +210,10 @@ impl WindowManager {
         Ok(())
     }
 
-    fn focus_any_window_for_app(&self, saved: &SavedWindow) -> Result<Option<SavedWindow>, PixieError> {
+    fn focus_any_window_for_app(
+        &self,
+        saved: &SavedWindow,
+    ) -> Result<Option<SavedWindow>, PixieError> {
         let mut candidates: Vec<_> = accessibility::get_all_windows()?
             .into_iter()
             .filter(|window| {
@@ -217,7 +221,12 @@ impl WindowManager {
             })
             .collect();
 
-        candidates.sort_by_key(|window| (if window.pid == saved.pid { 0 } else { 1 }, window.title.clone()));
+        candidates.sort_by_key(|window| {
+            (
+                if window.pid == saved.pid { 0 } else { 1 },
+                window.title.clone(),
+            )
+        });
 
         for window in candidates {
             if let Ok(element) = accessibility::find_window_by_id(window.pid, window.window_id)
@@ -247,7 +256,8 @@ impl WindowManager {
             Ok(info) => info,
             Err(_) => return Ok(None),
         };
-        let app_name = accessibility::get_app_name(info.pid).unwrap_or_else(|_| saved.app_name.clone());
+        let app_name =
+            accessibility::get_app_name(info.pid).unwrap_or_else(|_| saved.app_name.clone());
         if !app_names_match(&saved.app_name, &app_name) {
             return Ok(None);
         }
