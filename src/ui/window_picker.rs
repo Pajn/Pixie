@@ -39,6 +39,8 @@ pub enum PickerInput {
     ToggleSelect,
     Confirm,
     Cancel,
+    SearchBackspace,
+    SearchChar(char),
 }
 
 pub fn init(cx: &mut App) {
@@ -53,28 +55,89 @@ pub fn is_window_picker_active() -> bool {
     WINDOW_PICKER_ACTIVE.load(Ordering::SeqCst)
 }
 
-pub fn picker_input_from_keycode(keycode: i64) -> Option<PickerInput> {
+pub fn picker_input_from_keycode(keycode: i64, shift: bool) -> Option<PickerInput> {
     match keycode {
-        38 | 125 => Some(PickerInput::SelectDown),
-        40 | 126 => Some(PickerInput::SelectUp),
-        49 => Some(PickerInput::ToggleSelect),
+        125 => Some(PickerInput::SelectDown),
+        126 => Some(PickerInput::SelectUp),
         36 => Some(PickerInput::Confirm),
         53 => Some(PickerInput::Cancel),
+        51 | 117 => Some(PickerInput::SearchBackspace),
+        _ => printable_char_from_keycode(keycode, shift).map(PickerInput::SearchChar),
+    }
+}
+
+fn printable_char_from_keycode(keycode: i64, shift: bool) -> Option<char> {
+    match keycode {
+        0 => Some(if shift { 'A' } else { 'a' }),
+        1 => Some(if shift { 'S' } else { 's' }),
+        2 => Some(if shift { 'D' } else { 'd' }),
+        3 => Some(if shift { 'F' } else { 'f' }),
+        4 => Some(if shift { 'H' } else { 'h' }),
+        5 => Some(if shift { 'G' } else { 'g' }),
+        6 => Some(if shift { 'Z' } else { 'z' }),
+        7 => Some(if shift { 'X' } else { 'x' }),
+        8 => Some(if shift { 'C' } else { 'c' }),
+        9 => Some(if shift { 'V' } else { 'v' }),
+        11 => Some(if shift { 'B' } else { 'b' }),
+        12 => Some(if shift { 'Q' } else { 'q' }),
+        13 => Some(if shift { 'W' } else { 'w' }),
+        14 => Some(if shift { 'E' } else { 'e' }),
+        15 => Some(if shift { 'R' } else { 'r' }),
+        16 => Some(if shift { 'Y' } else { 'y' }),
+        17 => Some(if shift { 'T' } else { 't' }),
+        18 => Some(if shift { '!' } else { '1' }),
+        19 => Some(if shift { '@' } else { '2' }),
+        20 => Some(if shift { '#' } else { '3' }),
+        21 => Some(if shift { '$' } else { '4' }),
+        22 => Some(if shift { '^' } else { '6' }),
+        23 => Some(if shift { '%' } else { '5' }),
+        24 => Some(if shift { '+' } else { '=' }),
+        25 => Some(if shift { '(' } else { '9' }),
+        26 => Some(if shift { '&' } else { '7' }),
+        27 => Some(if shift { '_' } else { '-' }),
+        28 => Some(if shift { '*' } else { '8' }),
+        29 => Some(if shift { ')' } else { '0' }),
+        30 => Some(if shift { '}' } else { ']' }),
+        31 => Some(if shift { 'O' } else { 'o' }),
+        32 => Some(if shift { 'U' } else { 'u' }),
+        33 => Some(if shift { '{' } else { '[' }),
+        34 => Some(if shift { 'I' } else { 'i' }),
+        35 => Some(if shift { 'P' } else { 'p' }),
+        37 => Some(if shift { 'L' } else { 'l' }),
+        38 => Some(if shift { 'J' } else { 'j' }),
+        39 => Some(if shift { '"' } else { '\'' }),
+        40 => Some(if shift { 'K' } else { 'k' }),
+        41 => Some(if shift { ':' } else { ';' }),
+        42 => Some(if shift { '|' } else { '\\' }),
+        43 => Some(if shift { '<' } else { ',' }),
+        44 => Some(if shift { '?' } else { '/' }),
+        45 => Some(if shift { 'N' } else { 'n' }),
+        46 => Some(if shift { 'M' } else { 'm' }),
+        47 => Some(if shift { '>' } else { '.' }),
+        49 => Some(' '),
+        50 => Some(if shift { '~' } else { '`' }),
         _ => None,
     }
 }
 
-fn picker_input_from_key(key: &str) -> Option<PickerInput> {
-    PICKER_KEY_INPUTS
-        .iter()
-        .find(|(binding, _)| *binding == key)
-        .map(|(_, input)| *input)
-        .or(match key {
-            " " => Some(PickerInput::ToggleSelect),
-            "return" => Some(PickerInput::Confirm),
-            "esc" => Some(PickerInput::Cancel),
-            _ => None,
-        })
+fn picker_input_from_key(key: &str, shift: bool) -> Option<PickerInput> {
+    match key {
+        "down" => Some(PickerInput::SelectDown),
+        "up" => Some(PickerInput::SelectUp),
+        "enter" | "return" => Some(PickerInput::Confirm),
+        "escape" | "esc" => Some(PickerInput::Cancel),
+        "backspace" | "delete" => Some(PickerInput::SearchBackspace),
+        "space" => Some(PickerInput::SearchChar(' ')),
+        _ if key.chars().count() == 1 => key.chars().next().map(|ch| {
+            let ch = if shift && ch.is_ascii_lowercase() {
+                ch.to_ascii_uppercase()
+            } else {
+                ch
+            };
+            PickerInput::SearchChar(ch)
+        }),
+        _ => None,
+    }
 }
 
 fn picker_key_binding(key: &str, input: PickerInput) -> KeyBinding {
@@ -88,6 +151,7 @@ fn picker_key_binding(key: &str, input: PickerInput) -> KeyBinding {
         }
         PickerInput::Confirm => KeyBinding::new(key, Confirm, Some(WINDOW_PICKER_KEY_CONTEXT)),
         PickerInput::Cancel => KeyBinding::new(key, Cancel, Some(WINDOW_PICKER_KEY_CONTEXT)),
+        PickerInput::SearchBackspace | PickerInput::SearchChar(_) => unreachable!(),
     }
 }
 
@@ -97,6 +161,10 @@ pub struct WindowPickerState {
     pub current_monitor_count: usize,
     pub focused_index: usize,
     pub selected_indices: Vec<usize>,
+    pub search_mode: bool,
+    pub search_query: String,
+    pub search_matches: Vec<usize>,
+    pub search_match_index: usize,
     pub previously_focused_window: Option<(i32, u32)>,
     pub window_handle: Option<WindowHandle<PickerContainer>>,
 }
@@ -279,6 +347,44 @@ impl Render for PickerContainer {
 
         let height = px((row_count.min(10) as f32 * 40.0 + 60.0).max(160.0));
 
+        let (title, hint) = if state.search_mode {
+            let current_hit = if state.search_matches.is_empty() {
+                0
+            } else {
+                state.search_match_index + 1
+            };
+            (
+                format!(
+                    "/{} ({}/{})",
+                    state.search_query,
+                    current_hit,
+                    state.search_matches.len()
+                ),
+                "type to search • enter/esc exit".to_string(),
+            )
+        } else if state.search_query.is_empty() {
+            (
+                "Tile windows".to_string(),
+                "j/k navigate • space select • / search • n/N next/prev • enter tile • esc cancel"
+                    .to_string(),
+            )
+        } else {
+            let current_hit = if state.search_matches.is_empty() {
+                0
+            } else {
+                state.search_match_index + 1
+            };
+            (
+                format!(
+                    "Search /{} ({}/{})",
+                    state.search_query,
+                    current_hit,
+                    state.search_matches.len()
+                ),
+                "".to_string(),
+            )
+        };
+
         div()
             .flex()
             .flex_col()
@@ -294,8 +400,9 @@ impl Render for PickerContainer {
             .track_focus(&self.focus_handle)
             .on_key_down(
                 cx.listener(|_this, event: &gpui::KeyDownEvent, _window, cx| {
-                    let key = event.keystroke.key.to_ascii_lowercase();
-                    if let Some(input) = picker_input_from_key(&key) {
+                    let key = &event.keystroke.key;
+                    let shift = event.keystroke.modifiers.shift;
+                    if let Some(input) = picker_input_from_key(key, shift) {
                         handle_picker_input(input, cx);
                         cx.stop_propagation();
                     }
@@ -324,12 +431,8 @@ impl Render for PickerContainer {
                     .h(px(28.0))
                     .px_2()
                     .text_color(theme.muted_foreground)
-                    .child("Tile windows")
-                    .child(
-                        div()
-                            .text_xs()
-                            .child("j/k navigate • space select • enter tile • esc cancel"),
-                    ),
+                    .child(title)
+                    .child(div().text_xs().child(hint)),
             )
             .child(self.list.clone())
             .into_any_element()
@@ -340,13 +443,151 @@ pub fn handle_picker_input(input: PickerInput, cx: &mut App) {
     if !is_window_picker_active() {
         return;
     }
+    let search_mode = cx.global::<WindowPickerState>().search_mode;
+    if search_mode {
+        match input {
+            PickerInput::Confirm | PickerInput::Cancel => exit_search_mode(cx),
+            PickerInput::SearchBackspace => pop_search_char(cx),
+            PickerInput::SearchChar(ch) => push_search_char(ch, cx),
+            _ => {}
+        }
+        return;
+    }
     match input {
         PickerInput::SelectDown => select_down(cx),
         PickerInput::SelectUp => select_up(cx),
         PickerInput::ToggleSelect => toggle_select(cx),
         PickerInput::Confirm => confirm(cx),
         PickerInput::Cancel => cancel(cx),
+        PickerInput::SearchBackspace => {}
+        PickerInput::SearchChar('/') => enter_search_mode(cx),
+        PickerInput::SearchChar('j') => select_down(cx),
+        PickerInput::SearchChar('k') => select_up(cx),
+        PickerInput::SearchChar(' ') => toggle_select(cx),
+        PickerInput::SearchChar('q') => cancel(cx),
+        PickerInput::SearchChar('n') => search_next(cx),
+        PickerInput::SearchChar('N') => search_previous(cx),
+        PickerInput::SearchChar(_) => {}
     }
+}
+
+fn matches_query(window: &WindowEntry, query: &str) -> bool {
+    if query.is_empty() {
+        return false;
+    }
+    let query = query.to_ascii_lowercase();
+    window.app_name.to_ascii_lowercase().contains(&query)
+        || window.title.to_ascii_lowercase().contains(&query)
+}
+
+fn rebuild_search_matches(state: &mut WindowPickerState) {
+    state.search_matches = state
+        .windows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, window)| matches_query(window, &state.search_query).then_some(index))
+        .collect();
+
+    if state.search_matches.is_empty() {
+        state.search_match_index = 0;
+        return;
+    }
+
+    if let Some(position) = state
+        .search_matches
+        .iter()
+        .position(|index| *index == state.focused_index)
+    {
+        state.search_match_index = position;
+    } else {
+        state.search_match_index = 0;
+        state.focused_index = state.search_matches[0];
+    }
+}
+
+fn enter_search_mode(cx: &mut App) {
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        state.search_mode = true;
+        state.search_query.clear();
+        state.search_matches.clear();
+        state.search_match_index = 0;
+    });
+    refresh_window_list(cx);
+}
+
+fn exit_search_mode(cx: &mut App) {
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        state.search_mode = false;
+    });
+    refresh_window_list(cx);
+}
+
+fn push_search_char(ch: char, cx: &mut App) {
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        state.search_query.push(ch);
+        rebuild_search_matches(state);
+    });
+    refresh_window_list(cx);
+}
+
+fn pop_search_char(cx: &mut App) {
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        state.search_query.pop();
+        rebuild_search_matches(state);
+    });
+    refresh_window_list(cx);
+}
+
+fn search_next(cx: &mut App) {
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        if state.search_query.is_empty() {
+            return;
+        }
+        if state.search_matches.is_empty() {
+            rebuild_search_matches(state);
+        }
+        if state.search_matches.is_empty() {
+            return;
+        }
+        if let Some(position) = state
+            .search_matches
+            .iter()
+            .position(|index| *index == state.focused_index)
+        {
+            state.search_match_index = position;
+        }
+        state.search_match_index = (state.search_match_index + 1) % state.search_matches.len();
+        state.focused_index = state.search_matches[state.search_match_index];
+    });
+    refresh_window_list(cx);
+}
+
+fn search_previous(cx: &mut App) {
+    cx.update_global::<WindowPickerState, _>(|state, _| {
+        if state.search_query.is_empty() {
+            return;
+        }
+        if state.search_matches.is_empty() {
+            rebuild_search_matches(state);
+        }
+        if state.search_matches.is_empty() {
+            return;
+        }
+        if let Some(position) = state
+            .search_matches
+            .iter()
+            .position(|index| *index == state.focused_index)
+        {
+            state.search_match_index = position;
+        }
+        if state.search_match_index == 0 {
+            state.search_match_index = state.search_matches.len() - 1;
+        } else {
+            state.search_match_index -= 1;
+        }
+        state.focused_index = state.search_matches[state.search_match_index];
+    });
+    refresh_window_list(cx);
 }
 
 fn select_down(cx: &mut App) {
@@ -494,7 +735,8 @@ pub fn show_window_picker(cx: &mut App) {
     let mut windows = current_monitor_windows;
     windows.extend(secondary_windows);
 
-    let row_count = windows.len() + usize::from(current_monitor_count > 0 && windows.len() > current_monitor_count);
+    let row_count = windows.len()
+        + usize::from(current_monitor_count > 0 && windows.len() > current_monitor_count);
     let selected_indices = if let Some((_, id)) = previously_focused_window
         && let Some(index) = windows.iter().position(|w| w.window_id == id)
     {
@@ -508,6 +750,10 @@ pub fn show_window_picker(cx: &mut App) {
         current_monitor_count,
         focused_index: selected_indices.first().cloned().unwrap_or_default(),
         selected_indices,
+        search_mode: false,
+        search_query: String::new(),
+        search_matches: Vec::new(),
+        search_match_index: 0,
         previously_focused_window,
         window_handle: None,
     });

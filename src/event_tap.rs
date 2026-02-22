@@ -142,10 +142,14 @@ impl EventHandler {
             }
             CGEventType::KeyDown => {
                 if is_window_picker_active() {
-                    if let Some(input) = picker_input_from_keycode(keycode) {
+                    let has_shift = flags.contains(CGEventFlags::CGEventFlagShift);
+                    if let Some(input) = picker_input_from_keycode(keycode, has_shift) {
                         if is_autorepeat {
                             match input {
-                                PickerInput::SelectDown | PickerInput::SelectUp => {
+                                PickerInput::SelectDown
+                                | PickerInput::SelectUp
+                                | PickerInput::SearchChar('j')
+                                | PickerInput::SearchChar('k') => {
                                     let repeat = PICKER_REPEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
                                     if repeat % 2 != 0 {
                                         event.set_type(CGEventType::Null);
