@@ -344,6 +344,24 @@ timeout = 5
 - Saved windows: `~/Library/Application Support/pixie/saved_windows.json`
 - LaunchAgent (for autostart): `~/Library/LaunchAgents/com.pixie.plist`
 
+## Editor Support
+
+Pixie provides a JSON schema to enable autocompletion and documentation for your `config.toml`.
+
+### VS Code (Even Better TOML)
+
+If you use the **Even Better TOML** extension, add the following line to the top of your `config.toml`:
+
+```toml
+#:schema https://raw.githubusercontent.com/<user>/pixie/main/pixie.schema.json
+```
+
+Or if you have the repo cloned locally, you can point to the local file:
+
+```toml
+#:schema ./pixie.schema.json
+```
+
 ## Requirements
 
 - macOS 10.15 or later

@@ -1,0 +1,109 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pixie Configuration",
+  "description": "Configuration for Pixie, a macOS window management tool.",
+  "type": "object",
+  "properties": {
+    "leader_key": {
+      "type": "string",
+      "default": "cmd+shift+a",
+      "description": "Global leader key to activate Pixie mode. Format: 'modifiers+key' (e.g., 'cmd+shift+a'). Modifiers: cmd, super, alt, option, shift, ctrl, control."
+    },
+    "autostart": {
+      "type": "boolean",
+      "default": false,
+      "description": "Automatically start Pixie when you log in to macOS."
+    },
+    "timeout": {
+      "type": "integer",
+      "default": 2,
+      "description": "How long (in seconds) Pixie waits for a keypress after the leader key is pressed before cancelling leader mode."
+    },
+    "menubar_icon": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show the Pixie icon in the macOS menu bar."
+    },
+    "menubar_active_color": {
+      "type": "string",
+      "pattern": "^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$",
+      "description": "Optional hex color code (e.g., '#3b82f6') for the menu bar icon when leader mode is active. If omitted, uses your system accent color."
+    },
+    "keybinds": {
+      "type": "object",
+      "description": "Custom key bindings for actions. Keys can be 'leader+key' or a direct shortcut like 'cmd+ctrl+m'.",
+      "additionalProperties": {
+        "$ref": "#/definitions/Action"
+      }
+    },
+    "placements": {
+      "type": "object",
+      "description": "Custom window placement definitions using screen percentages.",
+      "additionalProperties": {
+        "$ref": "#/definitions/Placement"
+      }
+    }
+  },
+  "definitions": {
+    "Action": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "focus_left",
+            "focus_right",
+            "focus_up",
+            "focus_down",
+            "minimize",
+            "maximize",
+            "fullscreen",
+            "center",
+            "move_monitor_left",
+            "move_monitor_right",
+            "move_monitor_up",
+            "move_monitor_down",
+            "tile"
+          ],
+          "description": "A built-in window management action."
+        },
+        {
+          "type": "string",
+          "pattern": "^place_.*",
+          "description": "Apply a placement by name (e.g., 'place_left' or 'place_my_custom_placement')."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "place": {
+              "type": "string",
+              "description": "The name of the placement to apply."
+            }
+          },
+          "required": ["place"]
+        }
+      ]
+    },
+    "Placement": {
+      "type": "object",
+      "description": "A placement defines a window's position and size as a percentage of the screen.",
+      "properties": {
+        "top": {
+          "type": "string",
+          "description": "Vertical position: percentage (e.g., '50%') or 'center'. Omit to keep current position."
+        },
+        "left": {
+          "type": "string",
+          "description": "Horizontal position: percentage (e.g., '50%') or 'center'. Omit to keep current position."
+        },
+        "width": {
+          "type": "string",
+          "description": "Window width as a percentage (e.g., '33%'). Omit to keep current width."
+        },
+        "height": {
+          "type": "string",
+          "description": "Window height as a percentage (e.g., '100%'). Omit to keep current height."
+        }
+      }
+    }
+  }
+}
