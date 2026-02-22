@@ -31,6 +31,16 @@ sign identity=sign_identity:
 # Build, bundle, and sign the app (default ad-hoc signing)
 signed-app: app sign
 
+# Bump version in Cargo.toml and create a matching tag
+release-version version:
+    sed -i '' 's/^version = ".*"/version = "{{version}}"/' Cargo.toml
+    git add Cargo.toml
+    git commit -m "chore: bump version to {{version}}"
+    git tag "v{{version}}"
+    @echo "Version bumped to {{version}} and tag v{{version}} created."
+    @printf "\033]52;c;$(printf "git push origin main v{{version}}" | base64 | tr -d '\n')\a"
+    @echo "Push command 'git push origin main v{{version}}' copied to clipboard (OSC52)."
+
 # Install cargo-bundle if not already installed
 install-bundler:
     cargo install cargo-bundle

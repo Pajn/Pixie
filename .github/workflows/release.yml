@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
+
+      - name: Build and Bundle
+        run: |
+          cargo build --release
+          cargo bundle --release
+          # Ad-hoc sign the bundle
+          codesign --force --deep --sign "-" target/release/bundle/osx/Pixie.app
+
+      - name: Package .app as ZIP
+        run: |
+          cd target/release/bundle/osx
+          zip -r Pixie.app.zip Pixie.app
+          mv Pixie.app.zip ../../../../Pixie.app.zip
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Pixie.app.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
