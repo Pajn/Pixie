@@ -421,7 +421,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
             unsafe {
                 let ns_app = NSApplication::sharedApplication(nil);
                 ns_app.setActivationPolicy_(
-                    NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular,
+                    NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory,
                 );
                 ns_app.activateIgnoringOtherApps_(true);
             }
