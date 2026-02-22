@@ -6,11 +6,15 @@ use cocoa::appkit::{
 };
 use cocoa::base::{NO, YES, id, nil};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc::declare::ClassDecl;
+use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::config;
 use crate::error::{PixieError, Result};
 use crate::window::WindowManager;
 
@@ -20,6 +24,7 @@ pub struct MenuBarController {
     status_item: id,
     icon_image: id,
     active_icon_image: id,
+    menu_target: id,
 }
 
 impl MenuBarController {
@@ -42,12 +47,14 @@ impl MenuBarController {
                 .and_then(ns_color_from_hex)
                 .unwrap_or_else(default_active_color);
             let (icon_image, active_icon_image) = load_status_images(active_color);
+            let menu_target = create_menu_target();
 
             let controller = MenuBarController {
                 window_manager,
                 status_item,
                 icon_image,
                 active_icon_image,
+                menu_target,
             };
             controller.configure_button_icon();
             controller.refresh_menu();
@@ -101,6 +108,9 @@ impl MenuBarController {
             }
 
             menu.addItem_(NSMenuItem::separatorItem(nil));
+            self.add_open_config_menu_item(menu);
+
+            menu.addItem_(NSMenuItem::separatorItem(nil));
             let quit_title = NSString::alloc(nil).init_str("Quit Pixie");
             let quit_key = NSString::alloc(nil).init_str("q");
             let quit_item =
@@ -135,6 +145,15 @@ impl MenuBarController {
             let _: () = msg_send![item, setEnabled: NO];
         }
     }
+
+    fn add_open_config_menu_item(&self, menu: id) {
+        unsafe {
+            let title = NSString::alloc(nil).init_str("Open Config");
+            let key = NSString::alloc(nil).init_str(",");
+            let item = menu.addItemWithTitle_action_keyEquivalent(title, sel!(openConfig:), key);
+            NSMenuItem::setTarget_(item, self.menu_target);
+        }
+    }
 }
 
 impl Drop for MenuBarController {
@@ -148,9 +167,69 @@ impl Drop for MenuBarController {
             if self.active_icon_image != nil {
                 let _: () = msg_send![self.active_icon_image, release];
             }
+            if self.menu_target != nil {
+                let _: () = msg_send![self.menu_target, release];
+            }
             let _: () = msg_send![self.status_item, release];
         }
     }
+}
+
+fn create_menu_target() -> id {
+    static TARGET_CLASS: OnceLock<usize> = OnceLock::new();
+
+    unsafe {
+        let class_ptr = *TARGET_CLASS.get_or_init(|| {
+            if let Some(existing) = Class::get("PixieMenuTarget") {
+                return existing as *const Class as usize;
+            }
+
+            let mut decl = ClassDecl::new("PixieMenuTarget", class!(NSObject))
+                .expect("failed to declare PixieMenuTarget");
+            decl.add_method(
+                sel!(openConfig:),
+                open_config_action as extern "C" fn(&Object, Sel, id),
+            );
+            decl.register() as *const Class as usize
+        }) as *const Class;
+
+        let target: id = msg_send![class_ptr, new];
+        target
+    }
+}
+
+extern "C" fn open_config_action(_: &Object, _: Sel, _: id) {
+    if let Err(e) = open_config_in_editor() {
+        eprintln!("Failed to open config: {}", e);
+    }
+}
+
+fn open_config_in_editor() -> Result<()> {
+    let path = config::config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            PixieError::Config(format!("Failed to create config directory {:?}: {}", parent, e))
+        })?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| PixieError::Config(format!("Failed to create config file {:?}: {}", path, e)))?;
+
+    let status = Command::new("open")
+        .arg("-t")
+        .arg(&path)
+        .status()
+        .map_err(|e| PixieError::Config(format!("Failed to run open command: {}", e)))?;
+    if !status.success() {
+        return Err(PixieError::Config(format!(
+            "open command failed with status: {}",
+            status
+        )));
+    }
+
+    Ok(())
 }
 
 fn load_status_images(active_color: id) -> (id, id) {

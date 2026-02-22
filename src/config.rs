@@ -230,7 +230,7 @@ impl Config {
     }
 }
 
-fn config_path() -> PathBuf {
+pub fn config_path() -> PathBuf {
     let mut path = dirs::config_local_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push("pixie");
     path.push("config.toml");

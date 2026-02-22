@@ -534,6 +534,7 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                                         "Pixie",
                                         &format!("Focused [{}]: {}", c, window.app_name),
                                     );
+                                    refresh_menu = true;
                                 }
                                 Err(e) => eprintln!("✗ Failed: {}", e),
                             },

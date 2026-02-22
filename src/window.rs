@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -112,20 +113,55 @@ impl WindowManager {
             PixieError::Config(format!("No window registered for slot '{}'", key))
         })?;
 
-        // Find the window element by PID and window ID
-        let element = accessibility::find_window_by_id(saved.pid, saved.window_id)?;
+        if let Ok(element) = accessibility::find_window_by_id(saved.pid, saved.window_id) {
+            accessibility::focus_window(&element)?;
+            tracing::info!(
+                "Focused window at slot '{}': {} - {:?}",
+                key,
+                saved.app_name,
+                saved.title
+            );
+            return Ok(saved);
+        }
 
-        // Focus the window
-        accessibility::focus_window(&element)?;
+        if let Some(updated) = self.focus_any_window_for_app(&saved)? {
+            self.update_saved_window(key, updated.clone())?;
+            tracing::info!(
+                "Focused fallback window at slot '{}': {} - {:?}",
+                key,
+                updated.app_name,
+                updated.title
+            );
+            return Ok(updated);
+        }
 
-        tracing::info!(
-            "Focused window at slot '{}': {} - {:?}",
-            key,
-            saved.app_name,
-            saved.title
-        );
+        self.launch_app(&saved.app_name)?;
 
-        Ok(saved)
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(150));
+            if let Some(updated) = self.focus_any_window_for_app(&saved)? {
+                self.update_saved_window(key, updated.clone())?;
+                tracing::info!(
+                    "Focused launched-app window at slot '{}': {} - {:?}",
+                    key,
+                    updated.app_name,
+                    updated.title
+                );
+                return Ok(updated);
+            }
+            if let Some(updated) = self.capture_focused_window_if_matching(&saved)? {
+                self.update_saved_window(key, updated.clone())?;
+                tracing::info!(
+                    "Focused launched-app active window at slot '{}': {} - {:?}",
+                    key,
+                    updated.app_name,
+                    updated.title
+                );
+                return Ok(updated);
+            }
+        }
+
+        Err(PixieError::WindowNotFound)
     }
 
     /// Clear a specific slot, returns true if a window was removed
@@ -173,6 +209,86 @@ impl WindowManager {
         Ok(())
     }
 
+    fn focus_any_window_for_app(&self, saved: &SavedWindow) -> Result<Option<SavedWindow>, PixieError> {
+        let mut candidates: Vec<_> = accessibility::get_all_windows()?
+            .into_iter()
+            .filter(|window| {
+                window.pid == saved.pid || app_names_match(&saved.app_name, &window.app_name)
+            })
+            .collect();
+
+        candidates.sort_by_key(|window| (if window.pid == saved.pid { 0 } else { 1 }, window.title.clone()));
+
+        for window in candidates {
+            if let Ok(element) = accessibility::find_window_by_id(window.pid, window.window_id)
+                && accessibility::focus_window(&element).is_ok()
+            {
+                return Ok(Some(SavedWindow {
+                    pid: window.pid,
+                    window_id: window.window_id,
+                    app_name: window.app_name,
+                    title: window.title,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn capture_focused_window_if_matching(
+        &self,
+        saved: &SavedWindow,
+    ) -> Result<Option<SavedWindow>, PixieError> {
+        let element = match accessibility::get_focused_window() {
+            Ok(element) => element,
+            Err(_) => return Ok(None),
+        };
+        let info = match accessibility::get_window_info(&element) {
+            Ok(info) => info,
+            Err(_) => return Ok(None),
+        };
+        let app_name = accessibility::get_app_name(info.pid).unwrap_or_else(|_| saved.app_name.clone());
+        if !app_names_match(&saved.app_name, &app_name) {
+            return Ok(None);
+        }
+        let window_id = match accessibility::get_window_id(&element) {
+            Ok(window_id) => window_id,
+            Err(_) => return Ok(None),
+        };
+
+        Ok(Some(SavedWindow {
+            pid: info.pid,
+            window_id,
+            app_name,
+            title: info.title,
+        }))
+    }
+
+    fn launch_app(&self, app_name: &str) -> Result<(), PixieError> {
+        let status = Command::new("open")
+            .arg("-a")
+            .arg(app_name)
+            .status()
+            .map_err(|e| {
+                PixieError::Config(format!("Failed to launch app '{}': {}", app_name, e))
+            })?;
+        if !status.success() {
+            return Err(PixieError::Config(format!(
+                "Failed to launch app '{}': open returned {}",
+                app_name, status
+            )));
+        }
+        Ok(())
+    }
+
+    fn update_saved_window(&self, key: char, updated: SavedWindow) -> Result<(), PixieError> {
+        {
+            let mut guard = self.saved_windows.lock().unwrap();
+            guard.insert(key, updated);
+        }
+        self.save_to_disk()
+    }
+
     /// Load the saved windows from disk
     fn load_saved_windows(&self) -> Result<(), PixieError> {
         if !self.config_path.exists() {
@@ -192,6 +308,25 @@ impl WindowManager {
 
         Ok(())
     }
+}
+
+fn app_names_match(left: &str, right: &str) -> bool {
+    let normalized_left = normalize_app_name(left);
+    let normalized_right = normalize_app_name(right);
+    if normalized_left.is_empty() || normalized_right.is_empty() {
+        return false;
+    }
+    normalized_left == normalized_right
+        || normalized_left.contains(&normalized_right)
+        || normalized_right.contains(&normalized_left)
+}
+
+fn normalize_app_name(input: &str) -> String {
+    input
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
 }
 
 impl Default for WindowManager {

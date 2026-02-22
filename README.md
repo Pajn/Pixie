@@ -187,6 +187,7 @@ When running in menu bar mode, you can:
 
 - Click the 🧚 icon to see options
 - View all saved windows by slot
+- Open `config.toml` in the default text editor
 - See the icon highlight while leader mode is active
 - Register current window to a slot
 - Focus a saved window
@@ -199,7 +200,8 @@ When running in menu bar mode, you can:
 
 2. **Register**: Press a letter key with Shift (e.g., `Shift+m`) to register the currently focused window to that slot. Pixie captures the window using the macOS Accessibility API and stores its PID and CGWindowID.
 
-3. **Focus**: Press a letter key without Shift (e.g., `m`) to focus the window registered at that slot. Pixie finds the window by its stored identifiers and brings it to the front by:
+3. **Focus**: Press a letter key without Shift (e.g., `m`) to focus the window registered at that slot. Pixie first tries the exact saved window, then any window from the same app, and if none are open it launches the app and focuses the first available window.
+   It brings windows to the front by:
    - Setting the application's `AXFrontmost` attribute to true
    - Setting the window's `AXMain` attribute to true
    - Performing the `AXRaise` action
