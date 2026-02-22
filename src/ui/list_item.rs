@@ -152,7 +152,7 @@ impl RenderOnce for ListItem {
         );
 
         if let Some(suffix) = self.suffix {
-            content = content.child(div().flex_none().child(suffix));
+            content = content.child(div().flex_none().items_end().child(suffix));
         }
 
         item = item.child(content);

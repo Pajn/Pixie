@@ -291,10 +291,9 @@ impl Render for WindowList {
         }
 
         uniform_list(
-            cx.entity().clone(),
             "window-list",
             row_count,
-            move |_this, range: Range<usize>, _window, cx| {
+            cx.processor(move |_this, range: Range<usize>, _window, cx| {
                 let state = cx.global::<WindowPickerState>();
                 let theme = Theme::default();
                 let windows = &state.windows;
@@ -402,7 +401,7 @@ impl Render for WindowList {
                         }
                     })
                     .collect::<Vec<_>>()
-            },
+            }),
         )
         .h_full()
         .track_scroll(scroll_handle)

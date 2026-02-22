@@ -13,6 +13,7 @@ accessibility-sys = "0.2"
 
 # macOS core frameworks - match GPUI dependencies
 core-graphics = "0.24"
+core-text = "=21.0.0"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 cocoa = "0.25"
@@ -47,7 +48,7 @@ crossbeam = "0.8"
 bitflags = "2"
 
 # GPUI for window picker UI
-gpui = { git = "https://github.com/zed-industries/zed", rev = "2b677736bf81fe4fde9802b757bab5b08f064186" }
+gpui = "0.2.2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -57,7 +58,9 @@ objc2 = "0.6"
 objc2-app-kit = "0.3"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(feature, values("cargo-clippy"))',
+] }
 
 [profile.release]
 opt-level = 2
@@ -75,4 +78,3 @@ short_description = "macOS window focusing tool with global shortcuts"
 long_description = "Pixie is a macOS window focus tool with a leader key system for keyboard-driven window management"
 osx_minimum_system_version = "10.15"
 osx_info_plist_exts = ["Info.plist.ext"]
-

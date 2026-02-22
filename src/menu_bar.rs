@@ -114,7 +114,6 @@ impl MenuBarController {
             let _: () = msg_send![button, setTitle: fallback_title];
         }
     }
-
 }
 
 impl Drop for MenuBarController {

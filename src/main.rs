@@ -664,7 +664,9 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                 }
             });
 
-            cx.spawn(|cx| async move {
+            cx.spawn(|cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
                 while let Some(action) = ui_receiver.recv().await {
                     match action {
                         UiAction::ShowWindowPicker => {
@@ -710,10 +712,11 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                             .ok();
                         }
                         UiAction::Quit => {
-                            cx.update(|cx| cx.quit()).ok();
+                            cx.update(|cx: &mut gpui::App| cx.quit()).ok();
                             break;
                         }
                     }
+                }
                 }
             })
             .detach();
