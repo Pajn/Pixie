@@ -29,6 +29,8 @@ pub struct MenuBarController {
     menu_target: id,
 }
 
+static MENU_WINDOW_MANAGER: OnceLock<Arc<WindowManager>> = OnceLock::new();
+
 impl MenuBarController {
     /// Create a new menu bar controller
     pub fn new(
@@ -50,6 +52,7 @@ impl MenuBarController {
                 .unwrap_or_else(default_active_color);
             let (icon_image, active_icon_image) = load_status_images(active_color);
             let menu_target = create_menu_target();
+            let _ = MENU_WINDOW_MANAGER.set(window_manager.clone());
 
             let controller = MenuBarController {
                 window_manager,
@@ -90,34 +93,7 @@ impl MenuBarController {
     pub fn refresh_menu(&self) {
         unsafe {
             let menu = NSMenu::new(nil);
-            menu.setAutoenablesItems(NO);
-
-            let saved_windows = self.window_manager.get_all_saved_windows();
-            if saved_windows.is_empty() {
-                self.add_disabled_menu_item(menu, "No windows registered");
-            } else {
-                self.add_disabled_menu_item(menu, "Saved windows");
-
-                let mut windows: Vec<_> = saved_windows.into_iter().collect();
-                windows.sort_by_key(|(slot, _)| *slot);
-
-                for (slot, window) in windows {
-                    self.add_disabled_menu_item(
-                        menu,
-                        &format!("[{}] {}", slot, window.display_string()),
-                    );
-                }
-            }
-
-            menu.addItem_(NSMenuItem::separatorItem(nil));
-            self.add_open_config_menu_item(menu);
-
-            menu.addItem_(NSMenuItem::separatorItem(nil));
-            let quit_title = NSString::alloc(nil).init_str("Quit Pixie");
-            let quit_key = NSString::alloc(nil).init_str("q");
-            let quit_item =
-                menu.addItemWithTitle_action_keyEquivalent(quit_title, sel!(terminate:), quit_key);
-            NSMenuItem::setTarget_(quit_item, NSApp());
+            populate_menu(menu, self.menu_target, &self.window_manager);
             self.status_item.setMenu_(menu);
         }
     }
@@ -139,23 +115,6 @@ impl MenuBarController {
         }
     }
 
-    fn add_disabled_menu_item(&self, menu: id, title: &str) {
-        unsafe {
-            let ns_title = NSString::alloc(nil).init_str(title);
-            let ns_empty = NSString::alloc(nil).init_str("");
-            let item = menu.addItemWithTitle_action_keyEquivalent(ns_title, sel!(null), ns_empty);
-            let _: () = msg_send![item, setEnabled: NO];
-        }
-    }
-
-    fn add_open_config_menu_item(&self, menu: id) {
-        unsafe {
-            let title = NSString::alloc(nil).init_str("Open Config");
-            let key = NSString::alloc(nil).init_str(",");
-            let item = menu.addItemWithTitle_action_keyEquivalent(title, sel!(openConfig:), key);
-            NSMenuItem::setTarget_(item, self.menu_target);
-        }
-    }
 }
 
 impl Drop for MenuBarController {
@@ -192,6 +151,14 @@ fn create_menu_target() -> id {
                 sel!(openConfig:),
                 open_config_action as extern "C" fn(&Object, Sel, id),
             );
+            decl.add_method(
+                sel!(focusSlot:),
+                focus_slot_action as extern "C" fn(&Object, Sel, id),
+            );
+            decl.add_method(
+                sel!(clearAllSlots:),
+                clear_all_slots_action as extern "C" fn(&Object, Sel, id),
+            );
             decl.register() as *const Class as usize
         }) as *const Class;
 
@@ -203,6 +170,136 @@ fn create_menu_target() -> id {
 extern "C" fn open_config_action(_: &Object, _: Sel, _: id) {
     if let Err(e) = open_config_in_editor() {
         eprintln!("Failed to open config: {}", e);
+    }
+}
+
+extern "C" fn focus_slot_action(_: &Object, _: Sel, sender: id) {
+    let Some(window_manager) = MENU_WINDOW_MANAGER.get() else {
+        return;
+    };
+
+    let slot = unsafe {
+        let tag: i64 = msg_send![sender, tag];
+        u32::try_from(tag)
+            .ok()
+            .and_then(char::from_u32)
+            .map(|c| c.to_ascii_lowercase())
+    };
+
+    let Some(slot) = slot.filter(|slot| slot.is_ascii_lowercase()) else {
+        return;
+    };
+
+    if let Err(e) = window_manager.focus_saved_window(slot) {
+        eprintln!("Failed to focus slot '{}': {}", slot, e);
+        return;
+    }
+
+    refresh_menu_for_sender(sender, window_manager);
+}
+
+extern "C" fn clear_all_slots_action(_: &Object, _: Sel, sender: id) {
+    let Some(window_manager) = MENU_WINDOW_MANAGER.get() else {
+        return;
+    };
+
+    if let Err(e) = window_manager.clear_all_windows() {
+        eprintln!("Failed to clear all slots: {}", e);
+        return;
+    }
+
+    refresh_menu_for_sender(sender, window_manager);
+}
+
+fn refresh_menu_for_sender(sender: id, window_manager: &WindowManager) {
+    unsafe {
+        if sender == nil {
+            return;
+        }
+        let menu: id = msg_send![sender, menu];
+        if menu == nil {
+            return;
+        }
+        let target: id = msg_send![sender, target];
+        if target == nil {
+            return;
+        }
+
+        let _: () = msg_send![menu, removeAllItems];
+        populate_menu(menu, target, window_manager);
+    }
+}
+
+fn populate_menu(menu: id, menu_target: id, window_manager: &WindowManager) {
+    unsafe {
+        menu.setAutoenablesItems(NO);
+
+        let saved_windows = window_manager.get_all_saved_windows();
+        let has_saved_windows = !saved_windows.is_empty();
+        if !has_saved_windows {
+            add_disabled_menu_item(menu, "No windows registered");
+        } else {
+            add_disabled_menu_item(menu, "Saved windows");
+
+            let mut windows: Vec<_> = saved_windows.into_iter().collect();
+            windows.sort_by_key(|(slot, _)| *slot);
+
+            for (slot, window) in windows {
+                add_slot_menu_item(menu, menu_target, slot, &window.display_string());
+            }
+        }
+
+        menu.addItem_(NSMenuItem::separatorItem(nil));
+        add_clear_all_menu_item(menu, menu_target, has_saved_windows);
+        menu.addItem_(NSMenuItem::separatorItem(nil));
+        add_open_config_menu_item(menu, menu_target);
+        menu.addItem_(NSMenuItem::separatorItem(nil));
+
+        let quit_title = NSString::alloc(nil).init_str("Quit Pixie");
+        let quit_key = NSString::alloc(nil).init_str("q");
+        let quit_item =
+            menu.addItemWithTitle_action_keyEquivalent(quit_title, sel!(terminate:), quit_key);
+        NSMenuItem::setTarget_(quit_item, NSApp());
+    }
+}
+
+fn add_disabled_menu_item(menu: id, title: &str) {
+    unsafe {
+        let ns_title = NSString::alloc(nil).init_str(title);
+        let ns_empty = NSString::alloc(nil).init_str("");
+        let item = menu.addItemWithTitle_action_keyEquivalent(ns_title, sel!(null), ns_empty);
+        let _: () = msg_send![item, setEnabled: NO];
+    }
+}
+
+fn add_slot_menu_item(menu: id, menu_target: id, slot: char, label: &str) {
+    unsafe {
+        let title = NSString::alloc(nil).init_str(&format!("[{}] {}", slot, label));
+        let key = NSString::alloc(nil).init_str("");
+        let item = menu.addItemWithTitle_action_keyEquivalent(title, sel!(focusSlot:), key);
+        NSMenuItem::setTarget_(item, menu_target);
+        let _: () = msg_send![item, setTag: slot as i32];
+    }
+}
+
+fn add_open_config_menu_item(menu: id, menu_target: id) {
+    unsafe {
+        let title = NSString::alloc(nil).init_str("Open Config");
+        let key = NSString::alloc(nil).init_str(",");
+        let item = menu.addItemWithTitle_action_keyEquivalent(title, sel!(openConfig:), key);
+        NSMenuItem::setTarget_(item, menu_target);
+    }
+}
+
+fn add_clear_all_menu_item(menu: id, menu_target: id, enabled: bool) {
+    unsafe {
+        let title = NSString::alloc(nil).init_str("Clear All Slots");
+        let key = NSString::alloc(nil).init_str("");
+        let item = menu.addItemWithTitle_action_keyEquivalent(title, sel!(clearAllSlots:), key);
+        NSMenuItem::setTarget_(item, menu_target);
+        if !enabled {
+            let _: () = msg_send![item, setEnabled: NO];
+        }
     }
 }
 
