@@ -7,10 +7,96 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use global_hotkey::hotkey::{Code, Modifiers};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PixieError, Result};
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct Modifiers: u32 {
+        const SUPER = 1 << 0;
+        const ALT = 1 << 1;
+        const SHIFT = 1 << 2;
+        const CONTROL = 1 << 3;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KeyCode {
+    KeyA,
+    KeyB,
+    KeyC,
+    KeyD,
+    KeyE,
+    KeyF,
+    KeyG,
+    KeyH,
+    KeyI,
+    KeyJ,
+    KeyK,
+    KeyL,
+    KeyM,
+    KeyN,
+    KeyO,
+    KeyP,
+    KeyQ,
+    KeyR,
+    KeyS,
+    KeyT,
+    KeyU,
+    KeyV,
+    KeyW,
+    KeyX,
+    KeyY,
+    KeyZ,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    Space,
+    Escape,
+    Enter,
+    Tab,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ArrowDown,
+    Equal,
+    Minus,
+    BracketLeft,
+    BracketRight,
+    Backslash,
+    Semicolon,
+    Quote,
+    Comma,
+    Period,
+    Slash,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,6 +114,8 @@ pub enum Action {
     MoveMonitorUp,
     MoveMonitorDown,
     Place(String),
+    #[serde(rename = "tile")]
+    Tile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -46,10 +134,10 @@ pub struct Placement {
 pub enum Keybind {
     Direct {
         modifiers: Option<Modifiers>,
-        code: Code,
+        code: KeyCode,
     },
     LeaderPrefixed {
-        code: Code,
+        code: KeyCode,
     },
 }
 
@@ -101,8 +189,7 @@ impl Config {
     pub fn parse_keybind(key: &str) -> Result<Keybind> {
         let key_lower = key.to_lowercase();
 
-        if key_lower.starts_with("leader+") {
-            let rest = &key_lower["leader+".len()..];
+        if let Some(rest) = key_lower.strip_prefix("leader+") {
             let code = parse_key_code(rest.trim())?;
             Ok(Keybind::LeaderPrefixed { code })
         } else {
@@ -137,12 +224,17 @@ fn config_path() -> PathBuf {
     path
 }
 
-pub fn load() -> Config {
+pub fn load() -> Result<Config> {
     let path = config_path();
 
     match fs::read_to_string(&path) {
-        Ok(content) => toml::from_str(&content).unwrap_or_default(),
-        Err(_) => Config::default(),
+        Ok(content) => toml::from_str(&content).map_err(|e| {
+            PixieError::Config(format!(
+                "Failed to parse config file at {:?}:\n  {}",
+                path, e
+            ))
+        }),
+        Err(_) => Ok(Config::default()),
     }
 }
 
@@ -273,7 +365,7 @@ pub fn parse_size_value(s: &str, screen_size: f64) -> Result<f64> {
     Ok(pct * screen_size)
 }
 
-pub fn parse_leader_key(key: &str) -> Result<(Option<Modifiers>, Code)> {
+pub fn parse_leader_key(key: &str) -> Result<(Option<Modifiers>, KeyCode)> {
     let key_lower = key.to_lowercase();
     let parts: Vec<&str> = key_lower.split('+').collect();
 
@@ -314,28 +406,28 @@ fn parse_modifier(s: &str) -> Result<Modifiers> {
     }
 }
 
-fn special_key_to_code(s: &str) -> Option<Code> {
+fn special_key_to_code(s: &str) -> Option<KeyCode> {
     match s.to_lowercase().as_str() {
-        "space" => Some(Code::Space),
-        "escape" | "esc" => Some(Code::Escape),
-        "enter" | "return" => Some(Code::Enter),
-        "tab" => Some(Code::Tab),
-        "backspace" => Some(Code::Backspace),
-        "delete" => Some(Code::Delete),
-        "insert" => Some(Code::Insert),
-        "home" => Some(Code::Home),
-        "end" => Some(Code::End),
-        "pageup" => Some(Code::PageUp),
-        "pagedown" => Some(Code::PageDown),
-        "up" => Some(Code::ArrowUp),
-        "down" => Some(Code::ArrowDown),
-        "left" => Some(Code::ArrowLeft),
-        "right" => Some(Code::ArrowRight),
+        "space" => Some(KeyCode::Space),
+        "escape" | "esc" => Some(KeyCode::Escape),
+        "enter" | "return" => Some(KeyCode::Enter),
+        "tab" => Some(KeyCode::Tab),
+        "backspace" => Some(KeyCode::Backspace),
+        "delete" => Some(KeyCode::Delete),
+        "insert" => Some(KeyCode::Insert),
+        "home" => Some(KeyCode::Home),
+        "end" => Some(KeyCode::End),
+        "pageup" => Some(KeyCode::PageUp),
+        "pagedown" => Some(KeyCode::PageDown),
+        "up" => Some(KeyCode::ArrowUp),
+        "down" => Some(KeyCode::ArrowDown),
+        "left" => Some(KeyCode::ArrowLeft),
+        "right" => Some(KeyCode::ArrowRight),
         _ => None,
     }
 }
 
-fn parse_key_code(s: &str) -> Result<Code> {
+fn parse_key_code(s: &str) -> Result<KeyCode> {
     if let Some(code) = special_key_to_code(s) {
         return Ok(code);
     }
@@ -357,68 +449,68 @@ fn parse_key_code(s: &str) -> Result<Code> {
     Err(PixieError::Config(format!("Unknown key: {}", s)))
 }
 
-fn char_to_code(c: char) -> Result<Code> {
+fn char_to_code(c: char) -> Result<KeyCode> {
     match c {
-        'a' => Ok(Code::KeyA),
-        'b' => Ok(Code::KeyB),
-        'c' => Ok(Code::KeyC),
-        'd' => Ok(Code::KeyD),
-        'e' => Ok(Code::KeyE),
-        'f' => Ok(Code::KeyF),
-        'g' => Ok(Code::KeyG),
-        'h' => Ok(Code::KeyH),
-        'i' => Ok(Code::KeyI),
-        'j' => Ok(Code::KeyJ),
-        'k' => Ok(Code::KeyK),
-        'l' => Ok(Code::KeyL),
-        'm' => Ok(Code::KeyM),
-        'n' => Ok(Code::KeyN),
-        'o' => Ok(Code::KeyO),
-        'p' => Ok(Code::KeyP),
-        'q' => Ok(Code::KeyQ),
-        'r' => Ok(Code::KeyR),
-        's' => Ok(Code::KeyS),
-        't' => Ok(Code::KeyT),
-        'u' => Ok(Code::KeyU),
-        'v' => Ok(Code::KeyV),
-        'w' => Ok(Code::KeyW),
-        'x' => Ok(Code::KeyX),
-        'y' => Ok(Code::KeyY),
-        'z' => Ok(Code::KeyZ),
+        'a' => Ok(KeyCode::KeyA),
+        'b' => Ok(KeyCode::KeyB),
+        'c' => Ok(KeyCode::KeyC),
+        'd' => Ok(KeyCode::KeyD),
+        'e' => Ok(KeyCode::KeyE),
+        'f' => Ok(KeyCode::KeyF),
+        'g' => Ok(KeyCode::KeyG),
+        'h' => Ok(KeyCode::KeyH),
+        'i' => Ok(KeyCode::KeyI),
+        'j' => Ok(KeyCode::KeyJ),
+        'k' => Ok(KeyCode::KeyK),
+        'l' => Ok(KeyCode::KeyL),
+        'm' => Ok(KeyCode::KeyM),
+        'n' => Ok(KeyCode::KeyN),
+        'o' => Ok(KeyCode::KeyO),
+        'p' => Ok(KeyCode::KeyP),
+        'q' => Ok(KeyCode::KeyQ),
+        'r' => Ok(KeyCode::KeyR),
+        's' => Ok(KeyCode::KeyS),
+        't' => Ok(KeyCode::KeyT),
+        'u' => Ok(KeyCode::KeyU),
+        'v' => Ok(KeyCode::KeyV),
+        'w' => Ok(KeyCode::KeyW),
+        'x' => Ok(KeyCode::KeyX),
+        'y' => Ok(KeyCode::KeyY),
+        'z' => Ok(KeyCode::KeyZ),
         _ => Err(PixieError::Config(format!("Invalid letter key: {}", c))),
     }
 }
 
-fn digit_to_code(c: char) -> Result<Code> {
+fn digit_to_code(c: char) -> Result<KeyCode> {
     match c {
-        '0' => Ok(Code::Digit0),
-        '1' => Ok(Code::Digit1),
-        '2' => Ok(Code::Digit2),
-        '3' => Ok(Code::Digit3),
-        '4' => Ok(Code::Digit4),
-        '5' => Ok(Code::Digit5),
-        '6' => Ok(Code::Digit6),
-        '7' => Ok(Code::Digit7),
-        '8' => Ok(Code::Digit8),
-        '9' => Ok(Code::Digit9),
+        '0' => Ok(KeyCode::Digit0),
+        '1' => Ok(KeyCode::Digit1),
+        '2' => Ok(KeyCode::Digit2),
+        '3' => Ok(KeyCode::Digit3),
+        '4' => Ok(KeyCode::Digit4),
+        '5' => Ok(KeyCode::Digit5),
+        '6' => Ok(KeyCode::Digit6),
+        '7' => Ok(KeyCode::Digit7),
+        '8' => Ok(KeyCode::Digit8),
+        '9' => Ok(KeyCode::Digit9),
         _ => Err(PixieError::Config(format!("Invalid digit key: {}", c))),
     }
 }
 
-fn function_key_to_code(s: &str) -> Result<Code> {
+fn function_key_to_code(s: &str) -> Result<KeyCode> {
     match s.to_uppercase().as_str() {
-        "F1" => Ok(Code::F1),
-        "F2" => Ok(Code::F2),
-        "F3" => Ok(Code::F3),
-        "F4" => Ok(Code::F4),
-        "F5" => Ok(Code::F5),
-        "F6" => Ok(Code::F6),
-        "F7" => Ok(Code::F7),
-        "F8" => Ok(Code::F8),
-        "F9" => Ok(Code::F9),
-        "F10" => Ok(Code::F10),
-        "F11" => Ok(Code::F11),
-        "F12" => Ok(Code::F12),
+        "F1" => Ok(KeyCode::F1),
+        "F2" => Ok(KeyCode::F2),
+        "F3" => Ok(KeyCode::F3),
+        "F4" => Ok(KeyCode::F4),
+        "F5" => Ok(KeyCode::F5),
+        "F6" => Ok(KeyCode::F6),
+        "F7" => Ok(KeyCode::F7),
+        "F8" => Ok(KeyCode::F8),
+        "F9" => Ok(KeyCode::F9),
+        "F10" => Ok(KeyCode::F10),
+        "F11" => Ok(KeyCode::F11),
+        "F12" => Ok(KeyCode::F12),
         _ => Err(PixieError::Config(format!("Invalid function key: {}", s))),
     }
 }
@@ -494,17 +586,15 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
-    } else {
-        if path.exists() {
-            let _ = Command::new("launchctl")
-                .args(["unload", "-w"])
-                .arg(&path)
-                .output();
+    } else if path.exists() {
+        let _ = Command::new("launchctl")
+            .args(["unload", "-w"])
+            .arg(&path)
+            .output();
 
-            fs::remove_file(&path).map_err(|e| {
-                PixieError::Config(format!("Failed to remove LaunchAgent plist: {}", e))
-            })?;
-        }
+        fs::remove_file(&path).map_err(|e| {
+            PixieError::Config(format!("Failed to remove LaunchAgent plist: {}", e))
+        })?;
     }
 
     Ok(())

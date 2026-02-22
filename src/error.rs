@@ -27,12 +27,9 @@ pub enum PixieError {
 
     #[error("Leader mode error: {0}")]
     LeaderMode(String),
-}
 
-impl From<global_hotkey::Error> for PixieError {
-    fn from(e: global_hotkey::Error) -> Self {
-        PixieError::Hotkey(e.to_string())
-    }
+    #[error("Event tap error: {0}")]
+    EventTap(String),
 }
 
 pub type Result<T> = std::result::Result<T, PixieError>;

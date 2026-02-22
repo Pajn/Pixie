@@ -164,10 +164,10 @@ pub fn get_focused_window() -> Result<AXUIElement, PixieError> {
         })?;
 
     let window_attr: AXAttribute<CFType> = AXAttribute::new(&CFString::new("AXWindow"));
-    if let Ok(value) = focused_ui.attribute(&window_attr) {
-        if let Some(window) = value.downcast_into::<AXUIElement>() {
-            return Ok(window);
-        }
+    if let Ok(value) = focused_ui.attribute(&window_attr)
+        && let Some(window) = value.downcast_into::<AXUIElement>()
+    {
+        return Ok(window);
     }
 
     if focused_ui
@@ -311,21 +311,65 @@ pub fn focus_window(element: &AXUIElement) -> Result<(), PixieError> {
 
 /// Get the application name from a PID
 pub fn get_app_name(pid: i32) -> Result<String, PixieError> {
+    use std::path::Path;
     use std::process::Command;
 
-    let output = Command::new("ps")
+    let executable_path = match Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "comm="])
-        .output();
+        .output()
+    {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        Err(_) => return Ok("Unknown".to_string()),
+    };
 
-    match output {
-        Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).trim().to_string()),
-        Err(_) => Ok("Unknown".to_string()),
+    if executable_path.is_empty() {
+        return Ok("Unknown".to_string());
     }
+
+    if let Some(bundle_path) = bundle_path_from_executable(&executable_path) {
+        if let Ok(output) = Command::new("mdls")
+            .args(["-name", "kMDItemDisplayName", "-raw", &bundle_path])
+            .output()
+        {
+            let display_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if output.status.success() && !display_name.is_empty() && display_name != "(null)" {
+                return Ok(display_name);
+            }
+        }
+
+        if let Some(bundle_name) = Path::new(&bundle_path)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+        {
+            return Ok(bundle_name.to_string());
+        }
+    }
+
+    if let Some(binary_name) = Path::new(&executable_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+    {
+        return Ok(binary_name.to_string());
+    }
+
+    Ok(executable_path)
+}
+
+fn bundle_path_from_executable(executable_path: &str) -> Option<String> {
+    if let Some(idx) = executable_path.find(".app/") {
+        return Some(executable_path[..idx + 4].to_string());
+    }
+    if executable_path.ends_with(".app") {
+        return Some(executable_path.to_string());
+    }
+    None
 }
 
 /// Get the CGWindowID from an AXUIElement
 pub fn get_window_id(element: &AXUIElement) -> Result<CGWindowID, PixieError> {
-    extern "C" {
+    unsafe extern "C" {
         fn _AXUIElementGetWindow(element: AXUIElementRef, window_id: *mut u32) -> i32;
     }
 
@@ -354,10 +398,10 @@ pub fn find_window_by_id(pid: i32, window_id: CGWindowID) -> Result<AXUIElement,
     for i in 0..windows.len() {
         if let Some(window) = windows.get(i) {
             let window = window.clone();
-            if let Ok(id) = get_window_id(&window) {
-                if id == window_id {
-                    return Ok(window);
-                }
+            if let Ok(id) = get_window_id(&window)
+                && id == window_id
+            {
+                return Ok(window);
             }
         }
     }
@@ -476,12 +520,11 @@ pub fn find_window_in_direction(
             .and_then(|n| n.to_i64())
             .map(|n| n as u32);
 
-        if pid == from.pid {
-            if let (Some(wid), Some(from_wid)) = (window_id, from.window_id) {
-                if wid == from_wid {
-                    continue;
-                }
-            }
+        if pid == from.pid
+            && let (Some(wid), Some(from_wid)) = (window_id, from.window_id)
+            && wid == from_wid
+        {
+            continue;
         }
 
         // Get bounds from the window description
@@ -502,10 +545,9 @@ pub fn find_window_in_direction(
 
         if let Some(score) =
             calculate_direction_score_simple(from, (x, y, width, height), direction)
+            && let Some(wid) = window_id
         {
-            if let Some(wid) = window_id {
-                scored_candidates.push((score, i as usize, pid, wid));
-            }
+            scored_candidates.push((score, i as usize, pid, wid));
         }
     }
 
@@ -531,10 +573,10 @@ fn find_window_element_by_id(pid: i32, window_id: u32) -> Result<AXUIElement, Pi
     for i in 0..windows.len() {
         if let Some(win) = windows.get(i) {
             let win = win.clone();
-            if let Ok(win_id) = get_window_id(&win) {
-                if win_id == window_id {
-                    return Ok(win);
-                }
+            if let Ok(win_id) = get_window_id(&win)
+                && win_id == window_id
+            {
+                return Ok(win);
             }
         }
     }
@@ -670,6 +712,16 @@ pub struct Screen {
     pub is_main: bool,
 }
 
+/// A window entry for the window picker
+#[derive(Debug, Clone)]
+pub struct WindowEntry {
+    pub pid: i32,
+    pub window_id: u32,
+    pub app_name: String,
+    pub title: String,
+    pub bounds: (f64, f64, f64, f64), // x, y, width, height
+}
+
 pub fn get_screens() -> Result<Vec<Screen>, PixieError> {
     use core_graphics::display::CGDisplay;
 
@@ -699,6 +751,137 @@ pub fn get_screens() -> Result<Vec<Screen>, PixieError> {
     }
 
     Ok(screens)
+}
+
+/// Get all visible windows on a specific monitor
+pub fn get_windows_on_monitor(screen: &Screen) -> Result<Vec<WindowEntry>, PixieError> {
+    use core_foundation::number::CFNumber;
+    use core_graphics::window::{
+        create_description_from_array, create_window_list, kCGNullWindowID, kCGWindowBounds,
+        kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+        kCGWindowOwnerPID,
+    };
+
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let window_ids = create_window_list(options, kCGNullWindowID)
+        .ok_or_else(|| PixieError::Accessibility("Failed to get window list".to_string()))?;
+    let descriptions = create_description_from_array(window_ids).ok_or_else(|| {
+        PixieError::Accessibility("Failed to get window descriptions".to_string())
+    })?;
+
+    let layer_key = unsafe { CFString::wrap_under_get_rule(kCGWindowLayer) };
+    let owner_pid_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) };
+    let bounds_key = unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) };
+    let window_number_key = CFString::new("kCGWindowNumber");
+
+    let mut windows = Vec::new();
+
+    for i in 0..descriptions.len() {
+        let Some(window_desc) = descriptions.get(i) else {
+            continue;
+        };
+
+        // Filter by layer (0 = normal windows)
+        let layer = window_desc
+            .find(&layer_key)
+            .and_then(|v| v.downcast::<CFNumber>())
+            .and_then(|n| n.to_i64())
+            .unwrap_or(-1);
+        if layer != 0 {
+            continue;
+        }
+
+        let Some(pid) = window_desc
+            .find(&owner_pid_key)
+            .and_then(|v| v.downcast::<CFNumber>())
+            .and_then(|n| n.to_i32())
+        else {
+            continue;
+        };
+
+        // Skip our own process
+        if pid == std::process::id() as i32 {
+            continue;
+        }
+
+        let Some(window_id) = window_desc
+            .find(&window_number_key)
+            .and_then(|v| v.downcast::<CFNumber>())
+            .and_then(|n| n.to_i64())
+            .map(|n| n as u32)
+        else {
+            continue;
+        };
+
+        // Get bounds
+        let bounds_value = window_desc.find(&bounds_key);
+        let bounds_dict = match bounds_value {
+            Some(v) => match v.downcast::<CFDictionary>() {
+                Some(d) => d,
+                None => continue,
+            },
+            None => continue,
+        };
+
+        let x = get_dict_f64(&bounds_dict, "X");
+        let y = get_dict_f64(&bounds_dict, "Y");
+        let width = get_dict_f64(&bounds_dict, "Width");
+        let height = get_dict_f64(&bounds_dict, "Height");
+
+        // Check if window is on the specified screen
+        let window_center_x = x + width / 2.0;
+        let window_center_y = y + height / 2.0;
+
+        if window_center_x < screen.x
+            || window_center_x >= screen.x + screen.width
+            || window_center_y < screen.y
+            || window_center_y >= screen.y + screen.height
+        {
+            continue;
+        }
+
+        // Get app name and window title
+        let app_name = get_app_name(pid).unwrap_or_else(|_| "Unknown".to_string());
+        let title = get_window_title_for_entry(pid, window_id).unwrap_or_default();
+
+        windows.push(WindowEntry {
+            pid,
+            window_id,
+            app_name,
+            title,
+            bounds: (x, y, width, height),
+        });
+    }
+
+    // Sort by app name, then by title
+    windows.sort_by(|a, b| match a.app_name.cmp(&b.app_name) {
+        std::cmp::Ordering::Equal => a.title.cmp(&b.title),
+        other => other,
+    });
+
+    Ok(windows)
+}
+
+/// Get window title from PID and window ID
+fn get_window_title_for_entry(pid: i32, window_id: u32) -> Result<String, PixieError> {
+    let app_element = AXUIElement::application(pid);
+
+    let windows = app_element
+        .windows()
+        .map_err(|e| PixieError::Accessibility(format!("Failed to get windows: {:?}", e)))?;
+
+    for i in 0..windows.len() {
+        if let Some(win) = windows.get(i) {
+            let win = win.clone();
+            if let Ok(win_id) = get_window_id(&win)
+                && win_id == window_id
+            {
+                return Ok(win.title().map(|s| s.to_string()).unwrap_or_default());
+            }
+        }
+    }
+
+    Ok(String::new())
 }
 
 pub fn get_screen_for_window(window_rect: &WindowRect) -> Result<Screen, PixieError> {
@@ -974,10 +1157,7 @@ fn find_adjacent_screen(
 
     let candidates: Vec<(f64, &Screen)> = screens
         .iter()
-        .filter(|s| {
-            let is_different = (s.x - current.x).abs() > 1.0 || (s.y - current.y).abs() > 1.0;
-            is_different
-        })
+        .filter(|s| (s.x - current.x).abs() > 1.0 || (s.y - current.y).abs() > 1.0)
         .filter_map(|s| {
             let screen_center_x = s.x + s.width / 2.0;
             let screen_center_y = s.y + s.height / 2.0;
@@ -1055,4 +1235,34 @@ pub fn apply_placement(
     };
 
     set_window_rect(element, new_x, new_y, new_width, new_height)
+}
+
+/// Tile multiple windows in equal-width columns on a screen
+pub fn tile_windows_in_columns(
+    window_ids: &[(i32, u32)], // (pid, window_id) pairs
+    screen: &Screen,
+) -> Result<(), PixieError> {
+    if window_ids.is_empty() {
+        return Ok(());
+    }
+
+    let count = window_ids.len();
+    let menu_bar_height = if screen.is_main { 25.0 } else { 0.0 };
+    let dock_height = get_dock_height()?;
+
+    let available_x = screen.x;
+    let available_y = screen.y + menu_bar_height;
+    let available_width = screen.width;
+    let available_height = screen.height - menu_bar_height - dock_height;
+
+    let column_width = available_width / count as f64;
+
+    for (i, (pid, window_id)) in window_ids.iter().enumerate() {
+        if let Ok(element) = find_window_element_by_id(*pid, *window_id) {
+            let x = available_x + (i as f64 * column_width);
+            let _ = set_window_rect(&element, x, available_y, column_width, available_height);
+        }
+    }
+
+    Ok(())
 }

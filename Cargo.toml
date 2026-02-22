@@ -1,22 +1,19 @@
 [package]
 name = "pixie"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "macOS window focusing tool with global shortcuts"
 authors = ["Emma"]
 license = "MIT"
 
 [dependencies]
-# Global hotkey support
-global-hotkey = "0.7"
+# macOS Accessibility API (0.2 uses core-foundation 0.10, compatible with GPUI)
+accessibility = "0.2"
+accessibility-sys = "0.2"
 
-# macOS Accessibility API (uses core-foundation 0.9)
-accessibility = "0.1"
-accessibility-sys = "0.1"
-
-# macOS core frameworks - use 0.9 to match accessibility crate
-core-graphics = "0.23"
-core-foundation = "0.9"
+# macOS core frameworks - match GPUI dependencies
+core-graphics = "0.24"
+core-foundation = "0.10"
 core-foundation-sys = "0.8"
 cocoa = "0.25"
 objc = "0.2"
@@ -26,6 +23,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Error handling
 thiserror = "2"
+anyhow = "1"
 
 # Serialization for persistence
 serde = { version = "1", features = ["derive"] }
@@ -45,6 +43,19 @@ ctrlc = "3"
 # Multi-producer multi-consumer channels for thread-safe messaging
 crossbeam = "0.8"
 
+# Bitflags for modifier handling
+bitflags = "2"
+
+# GPUI for window picker UI
+gpui = { git = "https://github.com/zed-industries/zed", rev = "2b677736bf81fe4fde9802b757bab5b08f064186" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# For getting app icons
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+
 [profile.release]
 opt-level = 2
 lto = true
@@ -61,3 +72,5 @@ short_description = "macOS window focusing tool with global shortcuts"
 long_description = "Pixie is a macOS window focus tool with a leader key system for keyboard-driven window management"
 osx_minimum_system_version = "10.15"
 osx_info_plist_exts = ["Info.plist.ext"]
+
+

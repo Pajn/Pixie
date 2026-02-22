@@ -1,6 +1,6 @@
-use crossbeam::channel::{unbounded, Receiver, Sender};
-use std::sync::atomic::{AtomicBool, Ordering};
+use crossbeam::channel::{Receiver, Sender, unbounded};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 

@@ -3,20 +3,38 @@
 mod accessibility;
 mod config;
 mod error;
-mod hotkey;
+mod event_tap;
 mod leader_mode;
 mod menu_bar;
 mod notification;
+mod ui;
 mod window;
 
 use clap::{Parser, Subcommand};
-use std::sync::atomic::{AtomicBool, Ordering};
+use cocoa::appkit::{NSApplication, NSApplicationActivationPolicy};
+use cocoa::base::nil;
+use gpui::AssetSource;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+struct EmptyAssets;
+impl AssetSource for EmptyAssets {
+    fn load(&self, _path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        Ok(None)
+    }
+    fn list(&self, _path: &str) -> anyhow::Result<Vec<gpui::SharedString>> {
+        Ok(Vec::new())
+    }
+}
 
 use config::Action;
 use error::{PixieError, Result};
+use event_tap::EventTapAction;
 use leader_mode::{LeaderModeController, LeaderModeEvent};
 use window::WindowManager;
+
+struct WindowManagerState(pub Arc<WindowManager>);
+impl gpui::Global for WindowManagerState {}
 
 /// Pixie - macOS Window Focusing Tool
 #[derive(Parser, Debug)]
@@ -54,17 +72,16 @@ enum Commands {
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Check if we're running from Terminal - if so, Terminal needs permissions too
     let is_from_terminal = std::env::var("TERM_PROGRAM").is_ok();
     if is_from_terminal {
         println!("Note: Running from Terminal. If permissions don't work,");
         println!("      try running as: open /Applications/Pixie.app\n");
     }
 
-    // Verify accessibility works
     let mut attempts = 0;
     loop {
         match accessibility::test_api_access() {
@@ -239,17 +256,21 @@ fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
         Action::Center => match accessibility::get_focused_window() {
             Ok(element) => {
                 let placements = config::builtin_placements();
-                if let Some(placement) = placements.get("center") {
-                    if let Err(e) = accessibility::apply_placement(&element, placement) {
-                        eprintln!("✗ Failed to center window: {}", e);
-                    }
+                if let Some(placement) = placements.get("center")
+                    && let Err(e) = accessibility::apply_placement(&element, placement)
+                {
+                    eprintln!("✗ Failed to center window: {}", e);
                 }
             }
             Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
         },
         Action::Place(name) => match accessibility::get_focused_window() {
             Ok(element) => {
-                let config = config::load();
+                let config = config::load().unwrap_or_else(|e| {
+                    eprintln!("Error loading config: {}", e);
+                    eprintln!("Please fix your config file or remove it to use defaults.");
+                    std::process::exit(1);
+                });
                 let placements = config.get_placements();
                 if let Some(placement) = placements.get(name) {
                     if let Err(e) = accessibility::apply_placement(&element, placement) {
@@ -261,34 +282,40 @@ fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
             }
             Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
         },
+        Action::Tile => {}
     }
 }
 
 fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> {
-    let config = config::load();
+    let config = config::load().unwrap_or_else(|e| {
+        eprintln!("Error loading config: {}", e);
+        eprintln!("Please fix your config file or remove it to use defaults.");
+        std::process::exit(1);
+    });
 
     if config.autostart && !config::is_autostart_enabled() {
         if let Err(e) = config::set_autostart(true) {
             eprintln!("Warning: Failed to enable autostart: {}", e);
         }
-    } else if !config.autostart && config::is_autostart_enabled() {
-        if let Err(e) = config::set_autostart(false) {
-            eprintln!("Warning: Failed to disable autostart: {}", e);
-        }
+    } else if !config.autostart
+        && config::is_autostart_enabled()
+        && let Err(e) = config::set_autostart(false)
+    {
+        eprintln!("Warning: Failed to disable autostart: {}", e);
     }
 
-    let leader = config::parse_leader_key(&config.leader_key).unwrap_or_else(|_| {
-        (
-            Some(global_hotkey::hotkey::Modifiers::SUPER | global_hotkey::hotkey::Modifiers::SHIFT),
-            global_hotkey::hotkey::Code::KeyA,
-        )
-    });
+    let (leader_modifiers, leader_keycode) = config::parse_leader_key(&config.leader_key)
+        .unwrap_or_else(|_| {
+            (
+                Some(config::Modifiers::SUPER | config::Modifiers::SHIFT),
+                config::KeyCode::KeyA,
+            )
+        });
+
+    let leader_modifiers =
+        leader_modifiers.unwrap_or(config::Modifiers::SUPER | config::Modifiers::SHIFT);
 
     let keybinds = config.parsed_keybinds();
-    let direct_keybinds: Vec<_> = keybinds
-        .iter()
-        .filter(|k| matches!(k.keybind, config::Keybind::Direct { .. }))
-        .collect();
     let leader_keybinds: Vec<_> = keybinds
         .iter()
         .filter(|k| matches!(k.keybind, config::Keybind::LeaderPrefixed { .. }))
@@ -299,13 +326,6 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
         "  {} - Leader key (then press a letter to focus, or Shift+letter to register)",
         config.leader_key
     );
-
-    if !direct_keybinds.is_empty() {
-        println!("  Direct keybinds:");
-        for entry in direct_keybinds {
-            println!("    {:?} -> {:?}", entry.keybind, entry.action);
-        }
-    }
 
     if !leader_keybinds.is_empty() {
         println!("  Leader-prefixed keybinds:");
@@ -330,305 +350,387 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
     })
     .map_err(|e| PixieError::Config(format!("Failed to set Ctrl+C handler: {}", e)))?;
 
-    let leader_mode_controller = Arc::new(LeaderModeController::with_timeout(
-        std::time::Duration::from_secs(config.timeout),
-    )?);
-    let hotkey_config = hotkey::HotkeyConfig { leader, keybinds };
-    let hotkey_manager = Arc::new(hotkey::HotkeyManager::with_config(hotkey_config)?);
-    let leader_id = hotkey_manager.leader_id;
-
-    let receiver = global_hotkey::GlobalHotKeyEvent::receiver();
-    let controller_for_hotkey = Arc::clone(&leader_mode_controller);
-    let hotkey_manager_for_thread = Arc::clone(&hotkey_manager);
-    let wm_for_events = Arc::clone(&window_manager);
-    let event_receiver = leader_mode_controller.events();
-
-    std::thread::spawn(move || loop {
-        if !RUNNING.load(Ordering::SeqCst) {
-            break;
-        }
-
-        if let Ok(event) = receiver.try_recv() {
-            if event.state == global_hotkey::HotKeyState::Pressed {
-                if event.id == leader_id {
-                    hotkey_manager_for_thread.register_letter_hotkeys().ok();
-                    controller_for_hotkey.enter_listening_mode();
-                    notification::notify("Pixie", "Listening...");
-                    println!("Listening...");
-                } else if let Some(action) =
-                    hotkey_manager_for_thread.get_direct_keybind_action(event.id)
-                {
-                    controller_for_hotkey.send_action(action);
-                } else if controller_for_hotkey.is_listening() {
-                    if let Some(action) =
-                        hotkey_manager_for_thread.get_leader_keybind_action(event.id)
-                    {
-                        hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
-                        controller_for_hotkey.handle_action(action);
-                    } else if let Some(direction) =
-                        hotkey_manager_for_thread.get_arrow_direction(event.id)
-                    {
-                        hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
-                        controller_for_hotkey.handle_direction(direction);
-                    } else if let Some((letter, has_shift)) =
-                        hotkey_manager_for_thread.get_letter_info(event.id)
-                    {
-                        hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
-                        controller_for_hotkey.handle_key(letter, has_shift);
-                    }
-                }
-            }
-        }
-
-        if let Ok(event) = event_receiver.try_recv() {
-            match event {
-                LeaderModeEvent::RegisterSlot(c) => {
-                    let slot = c.to_ascii_lowercase();
-                    match wm_for_events.register_current_window(slot) {
-                        Ok((_, window)) => {
-                            notification::notify(
-                                "Pixie",
-                                &format!("Registered to [{}]: {}", slot, window.app_name),
-                            );
-                            println!("✓ Registered to [{}]: {}", slot, window.display_string())
-                        }
-                        Err(e) => eprintln!("✗ Failed: {}", e),
-                    }
-                }
-                LeaderModeEvent::FocusSlot(c) => match wm_for_events.focus_saved_window(c) {
-                    Ok(window) => {
-                        notification::notify(
-                            "Pixie",
-                            &format!("Focused [{}]: {}", c, window.app_name),
-                        );
-                        println!("✓ Focused [{}]: {}", c, window.display_string())
-                    }
-                    Err(e) => eprintln!("✗ Failed: {}", e),
-                },
-                LeaderModeEvent::Cancelled => {
-                    hotkey_manager_for_thread.unregister_letter_hotkeys().ok();
-                    notification::notify("Pixie", "Cancelled");
-                    println!("Cancelled");
-                }
-                LeaderModeEvent::KeybindAction(action) => {
-                    handle_keybind_action(&action, &wm_for_events);
-                }
-                LeaderModeEvent::FocusDirection(direction) => {
-                    match accessibility::get_focused_window() {
-                        Ok(focused_element) => {
-                            match accessibility::get_window_rect(&focused_element) {
-                                Ok(from_rect) => match accessibility::find_window_in_direction(
-                                    &from_rect, direction,
-                                ) {
-                                    Ok(target_window) => {
-                                        if let Err(e) = accessibility::focus_window(&target_window)
-                                        {
-                                            eprintln!("✗ Failed to focus window: {}", e);
-                                        }
-                                    }
-                                    Err(e) => eprintln!("✗ No window found {:?}: {}", direction, e),
-                                },
-                                Err(e) => eprintln!("✗ Failed to get window rect: {}", e),
-                            }
-                        }
-                        Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
-                    }
-                }
-            }
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    });
-
     if headless {
         println!("Running in headless mode (Ctrl+C to quit)...");
-        while RUNNING.load(Ordering::SeqCst) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-    } else {
-        run_with_menu_bar(&window_manager)?;
+        run_headless_only(window_manager, leader_modifiers, leader_keycode, keybinds)?;
+        return Ok(());
     }
+
+    enum UiAction {
+        ShowWindowPicker,
+        PickerInput(ui::PickerInput),
+        Quit,
+    }
+
+    let (ui_sender, mut ui_receiver) = tokio::sync::mpsc::unbounded_channel::<UiAction>();
+    let (event_sender, mut event_receiver) =
+        tokio::sync::mpsc::unbounded_channel::<EventTapAction>();
+
+    let wm_for_events = Arc::clone(&window_manager);
+
+    gpui::Application::new()
+        .with_assets(EmptyAssets)
+        .run(move |cx: &mut gpui::App| {
+            unsafe {
+                let ns_app = NSApplication::sharedApplication(nil);
+                ns_app.setActivationPolicy_(
+                    NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular,
+                );
+                ns_app.activateIgnoringOtherApps_(true);
+            }
+
+            tracing::trace!(
+                "creating event tap with leader_modifiers={:?}, leader_keycode={:?}",
+                leader_modifiers,
+                leader_keycode
+            );
+            let event_tap = event_tap::EventTap::new(
+                leader_modifiers,
+                leader_keycode,
+                keybinds.clone(),
+                event_sender,
+            );
+
+            if let Err(e) = &event_tap {
+                eprintln!("\n❌ Failed to create event tap:\n{}\n", e);
+                eprintln!("Pixie needs Accessibility permissions to monitor keyboard events.");
+                eprintln!("Please grant permissions and restart Pixie.");
+                let _ = ui_sender.send(UiAction::Quit);
+                return;
+            }
+            let _event_tap = event_tap.unwrap();
+
+            let leader_mode_controller = Arc::new(
+                LeaderModeController::with_timeout(std::time::Duration::from_secs(5))
+                    .expect("Failed to create leader mode controller"),
+            );
+
+            ui::init(cx);
+
+            cx.set_global(WindowManagerState(wm_for_events.clone()));
+
+            let leader_event_receiver = leader_mode_controller.events();
+            let controller = Arc::clone(&leader_mode_controller);
+            let wm = Arc::clone(&wm_for_events);
+            let ui_sender = ui_sender.clone();
+
+            std::thread::spawn(move || {
+                tracing::trace!("event tap thread started");
+
+                loop {
+                    if !RUNNING.load(Ordering::SeqCst) {
+                        let _ = ui_sender.send(UiAction::Quit);
+                        break;
+                    }
+
+                    match event_receiver.try_recv() {
+                        Ok(event) => {
+                            tracing::trace!("received event tap event: {:?}", event);
+                            match event {
+                                EventTapAction::LeaderPressed => {
+                                    controller.enter_listening_mode();
+                                    notification::notify("Pixie", "Listening...");
+                                }
+                                EventTapAction::LeaderReleased => {}
+                                EventTapAction::KeyPressed(keycode, has_shift) => {
+                                    if let Some(letter) = keycode_to_letter(keycode) {
+                                        controller.handle_key(letter, has_shift);
+                                    }
+                                }
+                                EventTapAction::ActionTriggered(action) => {
+                                    controller.handle_action(action);
+                                }
+                                EventTapAction::ArrowPressed(direction) => {
+                                    controller.handle_direction(direction);
+                                }
+                                EventTapAction::PickerInput(input) => {
+                                    let _ = ui_sender.send(UiAction::PickerInput(input));
+                                }
+                            }
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                            tracing::warn!("event tap receiver disconnected");
+                            let _ = ui_sender.send(UiAction::Quit);
+                            break;
+                        }
+                    }
+
+                    if let Ok(event) = leader_event_receiver.try_recv() {
+                        match event {
+                            LeaderModeEvent::RegisterSlot(c) => {
+                                let slot = c.to_ascii_lowercase();
+                                match wm.register_current_window(slot) {
+                                    Ok((_, window)) => {
+                                        notification::notify(
+                                            "Pixie",
+                                            &format!(
+                                                "Registered to [{}]: {}",
+                                                slot, window.app_name
+                                            ),
+                                        );
+                                    }
+                                    Err(e) => eprintln!("✗ Failed: {}", e),
+                                }
+                            }
+                            LeaderModeEvent::FocusSlot(c) => match wm.focus_saved_window(c) {
+                                Ok(window) => {
+                                    notification::notify(
+                                        "Pixie",
+                                        &format!("Focused [{}]: {}", c, window.app_name),
+                                    );
+                                }
+                                Err(e) => eprintln!("✗ Failed: {}", e),
+                            },
+                            LeaderModeEvent::Cancelled => {
+                                notification::notify("Pixie", "Cancelled");
+                            }
+                            LeaderModeEvent::KeybindAction(action) => {
+                                if matches!(action, Action::Tile) {
+                                    let _ = ui_sender.send(UiAction::ShowWindowPicker);
+                                } else {
+                                    handle_keybind_action(&action, &wm);
+                                }
+                            }
+                            LeaderModeEvent::FocusDirection(direction) => {
+                                match accessibility::get_focused_window() {
+                                    Ok(focused_element) => {
+                                        match accessibility::get_window_rect(&focused_element) {
+                                            Ok(from_rect) => {
+                                                match accessibility::find_window_in_direction(
+                                                    &from_rect, direction,
+                                                ) {
+                                                    Ok(target_window) => {
+                                                        if let Err(e) = accessibility::focus_window(
+                                                            &target_window,
+                                                        ) {
+                                                            eprintln!(
+                                                                "✗ Failed to focus window: {}",
+                                                                e
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!(
+                                                            "✗ No window found {:?}: {}",
+                                                            direction, e
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("✗ Failed to get window rect: {}", e)
+                                            }
+                                        }
+                                    }
+                                    Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+                                }
+                            }
+                        }
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            });
+
+            cx.spawn(|cx| async move {
+                while let Some(action) = ui_receiver.recv().await {
+                    match action {
+                        UiAction::ShowWindowPicker => {
+                            cx.update(|cx| {
+                                unsafe {
+                                    let ns_app = NSApplication::sharedApplication(nil);
+                                    ns_app.activateIgnoringOtherApps_(true);
+                                }
+                                ui::show_window_picker(cx);
+                            })
+                            .ok();
+                        }
+                        UiAction::PickerInput(input) => {
+                            cx.update(|cx| {
+                                ui::handle_picker_input(input, cx);
+                            })
+                            .ok();
+                        }
+                        UiAction::Quit => {
+                            cx.update(|cx| cx.quit()).ok();
+                            break;
+                        }
+                    }
+                }
+            })
+            .detach();
+        });
 
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn run_with_menu_bar(window_manager: &Arc<WindowManager>) -> Result<()> {
-    use cocoa::appkit::{NSApplication, NSStatusBar};
-    use cocoa::base::{id, nil, YES};
-    use cocoa::foundation::NSString;
-    use objc::declare::ClassDecl;
-    use objc::runtime::{Object, Sel};
-    use objc::{class, msg_send, sel, sel_impl};
-    use std::ffi::c_void;
-    use std::sync::atomic::{AtomicBool, Ordering};
+fn keycode_to_letter(keycode: i64) -> Option<char> {
+    match keycode {
+        0 => Some('a'),
+        1 => Some('s'),
+        2 => Some('d'),
+        3 => Some('f'),
+        4 => Some('h'),
+        5 => Some('g'),
+        6 => Some('z'),
+        7 => Some('x'),
+        8 => Some('c'),
+        9 => Some('v'),
+        11 => Some('b'),
+        12 => Some('q'),
+        13 => Some('w'),
+        14 => Some('e'),
+        15 => Some('r'),
+        16 => Some('y'),
+        17 => Some('t'),
+        31 => Some('o'),
+        32 => Some('u'),
+        34 => Some('i'),
+        35 => Some('p'),
+        38 => Some('j'),
+        40 => Some('k'),
+        37 => Some('l'),
+        46 => Some('m'),
+        45 => Some('n'),
+        _ => None,
+    }
+}
 
-    static CLASS_CREATED: AtomicBool = AtomicBool::new(false);
+fn run_headless_only(
+    window_manager: Arc<WindowManager>,
+    leader_modifiers: config::Modifiers,
+    leader_keycode: config::KeyCode,
+    keybinds: Vec<config::KeybindEntry>,
+) -> Result<()> {
+    let leader_mode_controller = Arc::new(LeaderModeController::with_timeout(
+        std::time::Duration::from_secs(5),
+    )?);
 
-    extern "C" fn noop_imp(_this: &Object, _sel: Sel, _sender: id) {}
+    let (event_sender, mut event_receiver) =
+        tokio::sync::mpsc::unbounded_channel::<EventTapAction>();
+    tracing::trace!(
+        "creating headless event tap with leader_modifiers={:?}, leader_keycode={:?}",
+        leader_modifiers,
+        leader_keycode
+    );
+    let event_tap = event_tap::EventTap::new(
+        leader_modifiers,
+        leader_keycode,
+        keybinds.clone(),
+        event_sender,
+    );
 
-    extern "C" fn clear_all_windows_imp(this: &Object, _sel: Sel, _sender: id) {
-        unsafe {
-            let wm_ptr: *mut c_void = *this.get_ivar("windowManager");
-            let wm = wm_ptr as *const WindowManager;
-            if let Some(wm) = wm.as_ref() {
-                let _ = wm.clear_all_windows();
-                let _ = crate::notification::notify("Pixie", "Cleared all slots");
-            }
-        }
+    if let Err(e) = &event_tap {
+        eprintln!("\n❌ Failed to create event tap:\n{}\n", e);
+        eprintln!("Pixie needs Accessibility permissions to monitor keyboard events.");
+        eprintln!("Please grant permissions and restart Pixie.");
+        return Err(PixieError::EventTap(e.clone()));
     }
 
-    extern "C" fn menu_needs_update_imp(this: &Object, _sel: Sel, menu: id) {
-        unsafe {
-            let _: () = msg_send![menu, removeAllItems];
+    let controller_for_event = Arc::clone(&leader_mode_controller);
+    let wm_for_events = Arc::clone(&window_manager);
+    let leader_event_receiver = leader_mode_controller.events();
 
-            let wm_ptr: *mut c_void = *this.get_ivar("windowManager");
-            let wm = wm_ptr as *const WindowManager;
-            let windows = if let Some(wm) = wm.as_ref() {
-                wm.get_all_saved_windows()
-            } else {
-                std::collections::HashMap::new()
-            };
+    std::thread::spawn(move || {
+        loop {
+            if !RUNNING.load(Ordering::SeqCst) {
+                break;
+            }
 
-            let header_title = NSString::alloc(nil).init_str("Saved Windows");
-            let header_item: id = msg_send![class!(NSMenuItem), alloc];
-            let empty_str = NSString::alloc(nil).init_str("");
-            let _: () = msg_send![header_item, initWithTitle: header_title action: sel!(noop:) keyEquivalent: empty_str];
-            let _: () = msg_send![header_item, setEnabled: false];
-            let _: () = msg_send![menu, addItem: header_item];
+            match event_receiver.try_recv() {
+                Ok(event) => match event {
+                    EventTapAction::LeaderPressed => {
+                        controller_for_event.enter_listening_mode();
+                        notification::notify("Pixie", "Listening...");
+                        println!("Listening...");
+                    }
+                    EventTapAction::LeaderReleased => {}
+                    EventTapAction::KeyPressed(keycode, has_shift) => {
+                        if let Some(letter) = keycode_to_letter(keycode) {
+                            controller_for_event.handle_key(letter, has_shift);
+                        }
+                    }
+                    EventTapAction::ActionTriggered(action) => {
+                        controller_for_event.handle_action(action);
+                    }
+                    EventTapAction::ArrowPressed(direction) => {
+                        controller_for_event.handle_direction(direction);
+                    }
+                    EventTapAction::PickerInput(_) => {}
+                },
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    break;
+                }
+            }
 
-            if windows.is_empty() {
-                let no_windows_title = NSString::alloc(nil).init_str("No windows saved");
-                let no_windows_item: id = msg_send![class!(NSMenuItem), alloc];
-                let empty_str = NSString::alloc(nil).init_str("");
-                let _: () = msg_send![no_windows_item, initWithTitle: no_windows_title action: sel!(noop:) keyEquivalent: empty_str];
-                let _: () = msg_send![no_windows_item, setEnabled: false];
-                let _: () = msg_send![menu, addItem: no_windows_item];
-            } else {
-                let mut slots: Vec<char> = windows.keys().cloned().collect();
-                slots.sort();
-                for slot in slots {
-                    if let Some(win) = windows.get(&slot) {
-                        let display = format!("[{}] {} - {}", slot, win.app_name, win.title);
-                        let item_title = NSString::alloc(nil).init_str(&display);
-                        let item: id = msg_send![class!(NSMenuItem), alloc];
-                        let empty_str = NSString::alloc(nil).init_str("");
-                        let _: () = msg_send![item, initWithTitle: item_title action: sel!(noop:) keyEquivalent: empty_str];
-                        let _: () = msg_send![item, setEnabled: false];
-                        let _: () = msg_send![menu, addItem: item];
+            if let Ok(event) = leader_event_receiver.try_recv() {
+                match event {
+                    LeaderModeEvent::RegisterSlot(c) => {
+                        let slot = c.to_ascii_lowercase();
+                        match wm_for_events.register_current_window(slot) {
+                            Ok((_, window)) => {
+                                notification::notify(
+                                    "Pixie",
+                                    &format!("Registered to [{}]: {}", slot, window.app_name),
+                                );
+                                println!("✓ Registered to [{}]: {}", slot, window.display_string())
+                            }
+                            Err(e) => eprintln!("✗ Failed: {}", e),
+                        }
+                    }
+                    LeaderModeEvent::FocusSlot(c) => match wm_for_events.focus_saved_window(c) {
+                        Ok(window) => {
+                            notification::notify(
+                                "Pixie",
+                                &format!("Focused [{}]: {}", c, window.app_name),
+                            );
+                            println!("✓ Focused [{}]: {}", c, window.display_string())
+                        }
+                        Err(e) => eprintln!("✗ Failed: {}", e),
+                    },
+                    LeaderModeEvent::Cancelled => {
+                        notification::notify("Pixie", "Cancelled");
+                        println!("Cancelled");
+                    }
+                    LeaderModeEvent::KeybindAction(action) => {
+                        handle_keybind_action(&action, &wm_for_events);
+                    }
+                    LeaderModeEvent::FocusDirection(direction) => {
+                        match accessibility::get_focused_window() {
+                            Ok(focused_element) => {
+                                match accessibility::get_window_rect(&focused_element) {
+                                    Ok(from_rect) => match accessibility::find_window_in_direction(
+                                        &from_rect, direction,
+                                    ) {
+                                        Ok(target_window) => {
+                                            if let Err(e) =
+                                                accessibility::focus_window(&target_window)
+                                            {
+                                                eprintln!("✗ Failed to focus window: {}", e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("✗ No window found {:?}: {}", direction, e)
+                                        }
+                                    },
+                                    Err(e) => eprintln!("✗ Failed to get window rect: {}", e),
+                                }
+                            }
+                            Err(e) => eprintln!("✗ Failed to get focused window: {}", e),
+                        }
                     }
                 }
             }
 
-            let sep: id = msg_send![class!(NSMenuItem), separatorItem];
-            let _: () = msg_send![menu, addItem: sep];
-
-            let clear_title = NSString::alloc(nil).init_str("Clear All Slots");
-            let clear_item: id = msg_send![class!(NSMenuItem), alloc];
-            let empty_str = NSString::alloc(nil).init_str("");
-            let delegate: id = this as *const Object as id;
-            let _: () = msg_send![clear_item, initWithTitle: clear_title action: sel!(clearAll:) keyEquivalent: empty_str];
-            let _: () = msg_send![clear_item, setTarget: delegate];
-            let _: () = msg_send![menu, addItem: clear_item];
-
-            let sep2: id = msg_send![class!(NSMenuItem), separatorItem];
-            let _: () = msg_send![menu, addItem: sep2];
-
-            let quit_title = NSString::alloc(nil).init_str("Quit Pixie");
-            let quit_item: id = msg_send![class!(NSMenuItem), alloc];
-            let quit_key = NSString::alloc(nil).init_str("q");
-            let _: () = msg_send![quit_item, initWithTitle: quit_title action: sel!(terminate:) keyEquivalent: quit_key];
-            let _: () = msg_send![menu, addItem: quit_item];
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-    }
+    });
 
-    unsafe {
-        let delegate_class = if CLASS_CREATED.swap(true, Ordering::SeqCst) {
-            class!(PixieMenuDelegate)
-        } else {
-            let superclass = class!(NSObject);
-            let mut decl = ClassDecl::new("PixieMenuDelegate", superclass)
-                .expect("Failed to create PixieMenuDelegate class");
-            decl.add_ivar::<*mut c_void>("windowManager");
-            decl.add_method(sel!(noop:), noop_imp as extern "C" fn(&Object, Sel, id));
-            decl.add_method(
-                sel!(clearAll:),
-                clear_all_windows_imp as extern "C" fn(&Object, Sel, id),
-            );
-            decl.add_method(
-                sel!(menuNeedsUpdate:),
-                menu_needs_update_imp as extern "C" fn(&Object, Sel, id),
-            );
-            decl.register()
-        };
-
-        let delegate: id = msg_send![delegate_class, alloc];
-        let delegate: id = msg_send![delegate, init];
-
-        let wm_ptr = Arc::into_raw(window_manager.clone()) as *mut c_void;
-        (*delegate).set_ivar("windowManager", wm_ptr);
-
-        let app = NSApplication::sharedApplication(nil);
-        app.setActivationPolicy_(
-            cocoa::appkit::NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory,
-        );
-
-        let status_bar = NSStatusBar::systemStatusBar(nil);
-        let status_item: id = msg_send![status_bar, statusItemWithLength: -1.0f64];
-
-        let button: id = msg_send![status_item, button];
-
-        let bundle: id = msg_send![class!(NSBundle), mainBundle];
-        let resource_path: id = msg_send![bundle, resourcePath];
-        let resource_path_str: *const i8 = msg_send![resource_path, UTF8String];
-        let resource_path_cstr = std::ffi::CStr::from_ptr(resource_path_str);
-        let image_path = format!(
-            "{}/menuTemplate@2x.png",
-            resource_path_cstr.to_str().unwrap()
-        );
-        let image_path_ns = NSString::alloc(nil).init_str(&image_path);
-
-        let image: id = msg_send![class!(NSImage), alloc];
-        let image: id = msg_send![image, initWithContentsOfFile: image_path_ns];
-        if image.is_null() {
-            let symbol_name = NSString::alloc(nil).init_str("wand.and.stars");
-            let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName: symbol_name accessibilityDescription: nil];
-            if !image.is_null() {
-                let _: () = msg_send![image, setTemplate: YES];
-                let _: () = msg_send![button, setImage: image];
-            } else {
-                let title = NSString::alloc(nil).init_str("🧚");
-                let _: () = msg_send![button, setTitle: title];
-            }
-        } else {
-            let _: () = msg_send![image, setTemplate: YES];
-            let _: () = msg_send![button, setImage: image];
-        }
-
-        let menu: id = msg_send![class!(NSMenu), alloc];
-        let _: () = msg_send![menu, init];
-        let _: () = msg_send![menu, setDelegate: delegate];
-
-        let _: () = msg_send![status_item, setMenu: menu];
-        let _ = status_item;
-        let _ = delegate;
-
-        app.activateIgnoringOtherApps_(true);
-    }
-
-    println!("Menu bar icon active. Quit from menu or Ctrl+C.");
-
-    unsafe {
-        let app = NSApplication::sharedApplication(nil);
-        app.run();
+    while RUNNING.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn run_with_menu_bar(_window_manager: &Arc<WindowManager>) -> Result<()> {
-    Err(PixieError::MenuBar(
-        "Menu bar mode is only supported on macOS".to_string(),
-    ))
 }
