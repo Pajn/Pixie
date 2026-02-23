@@ -317,6 +317,24 @@ Keybinds use the format `"modifiers+key" = "action"`:
 - **Direct keybinds**: No prefix (e.g., `"cmd+ctrl+m"` works globally without leader mode)
 - **Shift modifier**: Use `shift+` for uppercase (e.g., `"leader+shift+m"`)
 
+### Symbol Keys
+
+Symbol keys are supported in both leader and direct keybinds.
+
+- Supported symbols: `<`, `>`, `:`, `|`, `?`, `"`, `{`, `}`, `_`, `+`, `!`, `@`, `#`, `$`, `%`, `^`, `&`, `*`, `(`, `)`, plus existing unshifted symbols like `[`, `]`, `\\`, `;`, `'`, `,`, `.`, `/`, `-`, `=`.
+- Shift is applied automatically when a shifted symbol is used (for example, `"cmd+<"` implies `cmd+shift` + comma key).
+- Since `+` is also the separator in keybind strings, use named aliases when needed.
+
+Named aliases:
+- `plus`, `underscore`, `pipe`, `colon`, `less` (or `lt`), `greater` (or `gt`), `question`, `bang`
+
+Examples:
+- `"leader+<" = "focus_left"`
+- `"leader+|" = "focus_right"`
+- `"cmd+:" = "minimize"`
+- `"cmd+pipe" = "fullscreen"`
+- `"cmd+plus" = "maximize"`
+
 ### Monitor Movement
 
 The `move_monitor_*` actions preserve the window's relative position when moving between monitors. For example, if a window is centered on one monitor, it will be centered on the destination monitor. This works by:

@@ -436,7 +436,14 @@ pub fn parse_leader_key(key: &str) -> Result<(Option<Modifiers>, KeyCode)> {
         let part = part.trim();
 
         if i == parts.len() - 1 {
-            code = Some(parse_key_code(part)?);
+            let (parsed_code, requires_shift) = parse_key_code_with_shift(part)?;
+            code = Some(parsed_code);
+            if requires_shift {
+                modifiers = Some(match modifiers {
+                    Some(m) => m | Modifiers::SHIFT,
+                    None => Modifiers::SHIFT,
+                });
+            }
         } else {
             let modifier = parse_modifier(part)?;
             modifiers = Some(match modifiers {
@@ -484,35 +491,72 @@ fn special_key_to_code(s: &str) -> Option<KeyCode> {
 }
 
 fn parse_key_code(s: &str) -> Result<KeyCode> {
+    let (code, _) = parse_key_code_with_shift(s)?;
+    Ok(code)
+}
+
+fn parse_key_code_with_shift(s: &str) -> Result<(KeyCode, bool)> {
     if let Some(code) = special_key_to_code(s) {
-        return Ok(code);
+        return Ok((code, false));
     }
 
     if s.len() == 1 {
         let c = s.chars().next().unwrap();
         if c.is_ascii_lowercase() {
-            return char_to_code(c);
+            return char_to_code(c).map(|code| (code, false));
         }
         if c.is_ascii_digit() {
-            return digit_to_code(c);
+            return digit_to_code(c).map(|code| (code, false));
         }
         return match c {
-            '=' => Ok(KeyCode::Equal),
-            '-' => Ok(KeyCode::Minus),
-            '[' => Ok(KeyCode::BracketLeft),
-            ']' => Ok(KeyCode::BracketRight),
-            '\\' => Ok(KeyCode::Backslash),
-            ';' => Ok(KeyCode::Semicolon),
-            '\'' => Ok(KeyCode::Quote),
-            ',' => Ok(KeyCode::Comma),
-            '.' => Ok(KeyCode::Period),
-            '/' => Ok(KeyCode::Slash),
+            '=' => Ok((KeyCode::Equal, false)),
+            '+' => Ok((KeyCode::Equal, true)),
+            '-' => Ok((KeyCode::Minus, false)),
+            '_' => Ok((KeyCode::Minus, true)),
+            '[' => Ok((KeyCode::BracketLeft, false)),
+            '{' => Ok((KeyCode::BracketLeft, true)),
+            ']' => Ok((KeyCode::BracketRight, false)),
+            '}' => Ok((KeyCode::BracketRight, true)),
+            '\\' => Ok((KeyCode::Backslash, false)),
+            '|' => Ok((KeyCode::Backslash, true)),
+            ';' => Ok((KeyCode::Semicolon, false)),
+            ':' => Ok((KeyCode::Semicolon, true)),
+            '\'' => Ok((KeyCode::Quote, false)),
+            '"' => Ok((KeyCode::Quote, true)),
+            ',' => Ok((KeyCode::Comma, false)),
+            '<' => Ok((KeyCode::Comma, true)),
+            '.' => Ok((KeyCode::Period, false)),
+            '>' => Ok((KeyCode::Period, true)),
+            '/' => Ok((KeyCode::Slash, false)),
+            '?' => Ok((KeyCode::Slash, true)),
+            '!' => Ok((KeyCode::Digit1, true)),
+            '@' => Ok((KeyCode::Digit2, true)),
+            '#' => Ok((KeyCode::Digit3, true)),
+            '$' => Ok((KeyCode::Digit4, true)),
+            '%' => Ok((KeyCode::Digit5, true)),
+            '^' => Ok((KeyCode::Digit6, true)),
+            '&' => Ok((KeyCode::Digit7, true)),
+            '*' => Ok((KeyCode::Digit8, true)),
+            '(' => Ok((KeyCode::Digit9, true)),
+            ')' => Ok((KeyCode::Digit0, true)),
             _ => Err(PixieError::Config(format!("Unknown key: {}", s))),
         };
     }
 
+    match s.to_lowercase().as_str() {
+        "plus" => return Ok((KeyCode::Equal, true)),
+        "underscore" => return Ok((KeyCode::Minus, true)),
+        "pipe" => return Ok((KeyCode::Backslash, true)),
+        "colon" => return Ok((KeyCode::Semicolon, true)),
+        "less" | "lt" => return Ok((KeyCode::Comma, true)),
+        "greater" | "gt" => return Ok((KeyCode::Period, true)),
+        "question" => return Ok((KeyCode::Slash, true)),
+        "bang" => return Ok((KeyCode::Digit1, true)),
+        _ => {}
+    }
+
     if s.starts_with('f') || s.starts_with('F') {
-        return function_key_to_code(s);
+        return function_key_to_code(s).map(|code| (code, false));
     }
 
     Err(PixieError::Config(format!("Unknown key: {}", s)))
@@ -581,6 +625,65 @@ fn function_key_to_code(s: &str) -> Result<KeyCode> {
         "F11" => Ok(KeyCode::F11),
         "F12" => Ok(KeyCode::F12),
         _ => Err(PixieError::Config(format!("Invalid function key: {}", s))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_leader_prefixed_shifted_symbols() {
+        assert_eq!(
+            Config::parse_keybind("leader+<").unwrap(),
+            Keybind::LeaderPrefixed {
+                code: KeyCode::Comma
+            }
+        );
+        assert_eq!(
+            Config::parse_keybind("leader+|").unwrap(),
+            Keybind::LeaderPrefixed {
+                code: KeyCode::Backslash
+            }
+        );
+        assert_eq!(
+            Config::parse_keybind("leader+:").unwrap(),
+            Keybind::LeaderPrefixed {
+                code: KeyCode::Semicolon
+            }
+        );
+    }
+
+    #[test]
+    fn parses_direct_shifted_symbols_with_implicit_shift() {
+        assert_eq!(
+            Config::parse_keybind("cmd+<").unwrap(),
+            Keybind::Direct {
+                modifiers: Some(Modifiers::SUPER | Modifiers::SHIFT),
+                code: KeyCode::Comma
+            }
+        );
+        assert_eq!(
+            Config::parse_keybind("cmd+|").unwrap(),
+            Keybind::Direct {
+                modifiers: Some(Modifiers::SUPER | Modifiers::SHIFT),
+                code: KeyCode::Backslash
+            }
+        );
+        assert_eq!(
+            Config::parse_keybind("cmd+:").unwrap(),
+            Keybind::Direct {
+                modifiers: Some(Modifiers::SUPER | Modifiers::SHIFT),
+                code: KeyCode::Semicolon
+            }
+        );
+        assert_eq!(
+            Config::parse_keybind("cmd+!").unwrap(),
+            Keybind::Direct {
+                modifiers: Some(Modifiers::SUPER | Modifiers::SHIFT),
+                code: KeyCode::Digit1
+            }
+        );
     }
 }
 
