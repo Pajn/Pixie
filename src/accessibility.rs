@@ -1255,25 +1255,14 @@ pub fn minimize_window(element: &AXUIElement) -> Result<(), PixieError> {
 }
 
 pub fn maximize_window(element: &AXUIElement) -> Result<(), PixieError> {
-    let window_rect = get_window_rect(element)?;
-    let screen = get_screen_for_window(&window_rect)?;
+    let placement = crate::config::Placement {
+        top: Some("0%".to_string()),
+        left: Some("0%".to_string()),
+        width: Some("100%".to_string()),
+        height: Some("100%".to_string()),
+    };
 
-    let menu_bar_height = if screen.is_main { 25.0 } else { 0.0 };
-
-    let dock_height = get_dock_height()?;
-
-    let available_x = screen.x;
-    let available_y = screen.y + menu_bar_height;
-    let available_width = screen.width;
-    let available_height = screen.height - menu_bar_height - dock_height;
-
-    set_window_rect(
-        element,
-        available_x,
-        available_y,
-        available_width,
-        available_height,
-    )
+    apply_placement(element, &placement)
 }
 
 fn get_dock_height() -> Result<f64, PixieError> {
