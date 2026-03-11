@@ -305,7 +305,7 @@ fn apply_autostart_setting(enabled: bool) {
             eprintln!("Warning: Failed to enable autostart: {}", e);
         }
     } else if !enabled
-        && config::is_autostart_enabled()
+        && config::has_autostart_launch_agent()
         && let Err(e) = config::set_autostart(false)
     {
         eprintln!("Warning: Failed to disable autostart: {}", e);

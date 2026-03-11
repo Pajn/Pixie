@@ -56,6 +56,7 @@ tokio = { version = "1", features = ["full"] }
 # For getting app icons
 objc2 = "0.6"
 objc2-app-kit = "0.3"
+libc = "0.2.183"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use crate::accessibility::{
-    WindowEntry, find_window_by_id, focus_window, get_all_windows, get_focused_window,
+    Screen, WindowEntry, find_window_by_id, focus_window, get_all_windows, get_focused_window,
     get_screen_for_window, get_screens, get_window_rect, raise_window, tile_windows_in_columns,
 };
 use crate::ui::{ListItem, Theme};
@@ -164,6 +164,7 @@ fn picker_key_binding(key: &str, input: PickerInput) -> KeyBinding {
 pub struct WindowPickerState {
     pub windows: Vec<WindowEntry>,
     pub current_monitor_count: usize,
+    pub current_screen: Option<Screen>,
     pub focused_index: usize,
     pub selected_indices: Vec<usize>,
     pub search_mode: bool,
@@ -720,9 +721,10 @@ fn toggle_select(cx: &mut App) {
 }
 
 fn confirm(cx: &mut App) {
-    let (windows_to_tile, previously_focused_window): (
+    let (windows_to_tile, previously_focused_window, current_screen): (
         Vec<WindowIdentity>,
         Option<WindowIdentity>,
+        Option<Screen>,
     ) = {
         let state = cx.global::<WindowPickerState>();
         let indices = if state.selected_indices.is_empty() {
@@ -735,7 +737,11 @@ fn confirm(cx: &mut App) {
             .filter_map(|i| state.windows.get(i))
             .map(|w| (w.pid, w.window_id))
             .collect();
-        (windows, state.previously_focused_window)
+        (
+            windows,
+            state.previously_focused_window,
+            state.current_screen.clone(),
+        )
     };
 
     close_picker(cx);
@@ -747,11 +753,14 @@ fn confirm(cx: &mut App) {
         return;
     }
 
-    if !windows_to_tile.is_empty()
-        && let Ok(screens) = get_screens()
-        && let Some(main_screen) = screens.iter().find(|s| s.is_main)
-    {
-        let _ = tile_windows_in_columns(&windows_to_tile, main_screen);
+    if !windows_to_tile.is_empty() {
+        if let Some(screen) = current_screen.as_ref() {
+            let _ = tile_windows_in_columns(&windows_to_tile, screen);
+        } else if let Ok(screens) = get_screens()
+            && let Some(main_screen) = screens.iter().find(|s| s.is_main)
+        {
+            let _ = tile_windows_in_columns(&windows_to_tile, main_screen);
+        }
     }
 
     for (pid, window_id) in &windows_to_tile {
@@ -865,6 +874,7 @@ fn show_window_picker_with_mode(cx: &mut App, preselect_focused_window: bool) {
     cx.set_global(WindowPickerState {
         windows,
         current_monitor_count,
+        current_screen: Some(current_screen.clone()),
         focused_index,
         selected_indices,
         search_mode: false,

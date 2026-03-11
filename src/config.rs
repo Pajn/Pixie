@@ -685,6 +685,14 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn launch_agent_plist_uses_runtime_binary_path() {
+        let plist = render_launch_agent_plist(Path::new("/tmp/Pixie & Tools/pixie"));
+        assert!(plist.contains("<string>/tmp/Pixie &amp; Tools/pixie</string>"));
+        assert!(plist.contains("<string>--headless</string>"));
+        assert!(plist.contains("<string>com.pixie</string>"));
+    }
 }
 
 fn launch_agent_path() -> PathBuf {
@@ -695,15 +703,30 @@ fn launch_agent_path() -> PathBuf {
     path
 }
 
-const LAUNCH_AGENT_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+const LAUNCH_AGENT_LABEL: &str = "com.pixie";
+
+fn xml_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn render_launch_agent_plist(executable: &Path) -> String {
+    let executable = xml_escape(&executable.display().to_string());
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.pixie</string>
+    <string>{LAUNCH_AGENT_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/Pixie.app/Contents/MacOS/pixie</string>
+        <string>{executable}</string>
         <string>--headless</string>
     </array>
     <key>RunAtLoad</key>
@@ -712,7 +735,22 @@ const LAUNCH_AGENT_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <false/>
 </dict>
 </plist>
-"#;
+"#
+    )
+}
+
+fn launchctl_domain_target() -> String {
+    format!("gui/{}", unsafe { libc::geteuid() })
+}
+
+fn launchctl_service_target() -> String {
+    format!("{}/{}", launchctl_domain_target(), LAUNCH_AGENT_LABEL)
+}
+
+fn current_launch_agent_executable() -> Result<PathBuf> {
+    std::env::current_exe()
+        .map_err(|e| PixieError::Config(format!("Failed to determine Pixie executable: {}", e)))
+}
 
 pub fn is_autostart_enabled() -> bool {
     let path = launch_agent_path();
@@ -722,13 +760,18 @@ pub fn is_autostart_enabled() -> bool {
     }
 
     let output = Command::new("launchctl")
-        .args(["list", "com.pixie"])
+        .arg("print")
+        .arg(launchctl_service_target())
         .output();
 
     match output {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
+}
+
+pub fn has_autostart_launch_agent() -> bool {
+    launch_agent_path().exists()
 }
 
 pub fn set_autostart(enabled: bool) -> Result<()> {
@@ -738,30 +781,63 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
         let parent = path.parent().ok_or_else(|| {
             PixieError::Config("Could not determine LaunchAgents directory".to_string())
         })?;
+        let executable = current_launch_agent_executable()?;
+        let plist = render_launch_agent_plist(&executable);
+        let domain_target = launchctl_domain_target();
+        let service_target = launchctl_service_target();
 
         fs::create_dir_all(parent).map_err(|e| {
             PixieError::Config(format!("Failed to create LaunchAgents directory: {}", e))
         })?;
 
-        fs::write(&path, LAUNCH_AGENT_PLIST)
+        fs::write(&path, plist)
             .map_err(|e| PixieError::Config(format!("Failed to write LaunchAgent plist: {}", e)))?;
 
+        let _ = Command::new("launchctl")
+            .arg("enable")
+            .arg(&service_target)
+            .output();
+        let _ = Command::new("launchctl")
+            .arg("bootout")
+            .arg(&domain_target)
+            .arg(&path)
+            .output();
+
         let output = Command::new("launchctl")
-            .args(["load", "-w"])
+            .arg("bootstrap")
+            .arg(&domain_target)
             .arg(&path)
             .output()
-            .map_err(|e| PixieError::Config(format!("Failed to run launchctl load: {}", e)))?;
+            .map_err(|e| PixieError::Config(format!("Failed to run launchctl bootstrap: {}", e)))?;
 
         if !output.status.success() {
             return Err(PixieError::Config(format!(
-                "launchctl load failed: {}",
+                "launchctl bootstrap failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        let output = Command::new("launchctl")
+            .args(["kickstart", "-k"])
+            .arg(&service_target)
+            .output()
+            .map_err(|e| PixieError::Config(format!("Failed to run launchctl kickstart: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(PixieError::Config(format!(
+                "launchctl kickstart failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
     } else if path.exists() {
         let _ = Command::new("launchctl")
-            .args(["unload", "-w"])
+            .arg("bootout")
+            .arg(launchctl_domain_target())
             .arg(&path)
+            .output();
+        let _ = Command::new("launchctl")
+            .arg("disable")
+            .arg(launchctl_service_target())
             .output();
 
         fs::remove_file(&path).map_err(|e| {
