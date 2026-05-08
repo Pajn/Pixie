@@ -300,7 +300,7 @@ fn handle_keybind_action(action: &Action, _window_manager: &WindowManager) {
 }
 
 fn apply_autostart_setting(enabled: bool) {
-    if enabled && !config::is_autostart_enabled() {
+    if enabled && !config::is_autostart_current() {
         if let Err(e) = config::set_autostart(true) {
             eprintln!("Warning: Failed to enable autostart: {}", e);
         }

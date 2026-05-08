@@ -690,7 +690,7 @@ mod tests {
     fn launch_agent_plist_uses_runtime_binary_path() {
         let plist = render_launch_agent_plist(Path::new("/tmp/Pixie & Tools/pixie"));
         assert!(plist.contains("<string>/tmp/Pixie &amp; Tools/pixie</string>"));
-        assert!(plist.contains("<string>--headless</string>"));
+        assert!(!plist.contains("<string>--headless</string>"));
         assert!(plist.contains("<string>com.pixie</string>"));
     }
 }
@@ -727,7 +727,6 @@ fn render_launch_agent_plist(executable: &Path) -> String {
     <key>ProgramArguments</key>
     <array>
         <string>{executable}</string>
-        <string>--headless</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -768,6 +767,21 @@ pub fn is_autostart_enabled() -> bool {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
+}
+
+fn autostart_launch_agent_matches_current_executable() -> bool {
+    let Ok(executable) = current_launch_agent_executable() else {
+        return false;
+    };
+    let expected_plist = render_launch_agent_plist(&executable);
+
+    fs::read_to_string(launch_agent_path())
+        .map(|plist| plist == expected_plist)
+        .unwrap_or(false)
+}
+
+pub fn is_autostart_current() -> bool {
+    is_autostart_enabled() && autostart_launch_agent_matches_current_executable()
 }
 
 pub fn has_autostart_launch_agent() -> bool {
