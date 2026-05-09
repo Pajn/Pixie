@@ -25,7 +25,7 @@ app: bundle
 
 # Sign the app bundle in dist/
 sign identity=sign_identity:
-    codesign --force --deep --sign "{{identity}}" "{{dist_bundle}}"
+    codesign --force --deep --sign "{{identity}}" --requirements '=designated => identifier "com.pixie.app"' "{{dist_bundle}}"
     codesign --verify --deep --strict --verbose=2 "{{dist_bundle}}"
 
 # Build, bundle, and sign the app (default ad-hoc signing)

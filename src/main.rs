@@ -14,6 +14,8 @@ use clap::{Parser, Subcommand};
 use cocoa::appkit::{NSApplication, NSApplicationActivationPolicy};
 use cocoa::base::nil;
 use gpui::AssetSource;
+use std::fs::{self, File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -83,58 +85,93 @@ async fn main() -> Result<()> {
         println!("      try running as: open /Applications/Pixie.app\n");
     }
 
-    if is_from_terminal {
-        let mut attempts = 0;
-        loop {
-            match accessibility::test_api_access() {
-                Ok(()) => {
-                    tracing::info!("Accessibility API working");
-                    break;
-                }
-                Err(e) => {
-                    if attempts == 0 {
-                        println!("\n⚠️  Accessibility API not available: {}", e);
-                        println!("\nSteps to fix:");
-                        println!("1. System Preferences → Privacy & Security → Accessibility");
-                        println!("2. Make sure Pixie.app is in the list AND CHECKED");
-                        println!("3. If running from Terminal, also add Terminal.app");
-                        println!("\nOpening System Preferences...\n");
-
-                        accessibility::request_accessibility_permissions();
-
-                        let _ = std::process::Command::new("open")
-                            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-                            .spawn();
-                    }
-
-                    attempts += 1;
-                    if attempts % 5 == 0 {
-                        println!("Still waiting for permissions... (attempt {})", attempts);
-                    }
-
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
-            }
-        }
-    } else if let Err(e) = accessibility::test_api_access() {
-        tracing::warn!(
-            "Accessibility API not ready at app launch: {}. Prompting and exiting for relaunch.",
-            e
-        );
-        accessibility::request_accessibility_permissions();
-        let _ = std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .spawn();
-        return Ok(());
-    }
-
     let window_manager = Arc::new(WindowManager::new()?);
 
     if let Some(cmd) = args.command {
         return handle_command(cmd, &window_manager);
     }
 
+    let _instance_lock = match acquire_daemon_instance_lock()? {
+        Some(lock) => lock,
+        None => return Ok(()),
+    };
+
+    ensure_accessibility_permissions(is_from_terminal)?;
+
     run_daemon(window_manager, args.headless)
+}
+
+fn acquire_daemon_instance_lock() -> Result<Option<File>> {
+    let mut path = dirs::config_local_dir().unwrap_or_else(|| ".".into());
+    path.push("pixie");
+    fs::create_dir_all(&path)
+        .map_err(|e| PixieError::Config(format!("Failed to create config directory: {}", e)))?;
+    path.push("pixie.lock");
+
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| PixieError::Config(format!("Failed to open lock file {:?}: {}", path, e)))?;
+
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result == 0 {
+        Ok(Some(file))
+    } else {
+        eprintln!("Pixie is already running; exiting duplicate instance.");
+        Ok(None)
+    }
+}
+
+fn ensure_accessibility_permissions(is_from_terminal: bool) -> Result<()> {
+    let mut attempts = 0;
+    loop {
+        match accessibility::test_api_access() {
+            Ok(()) => {
+                tracing::info!("Accessibility API working");
+                return Ok(());
+            }
+            Err(e) => {
+                if attempts == 0 {
+                    if is_from_terminal {
+                        println!("\n⚠️  Accessibility API not available: {}", e);
+                        println!("\nSteps to fix:");
+                        println!("1. System Preferences → Privacy & Security → Accessibility");
+                        println!("2. Make sure Pixie.app is in the list AND CHECKED");
+                        println!("3. If running from Terminal, also add Terminal.app");
+                        println!("\nOpening System Preferences...\n");
+                    } else {
+                        eprintln!(
+                            "Accessibility API not available: {}. Prompting and exiting for relaunch.",
+                            e
+                        );
+                    }
+
+                    accessibility::request_accessibility_permissions();
+
+                    let _ = std::process::Command::new("open")
+                        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                        .spawn();
+
+                    if !is_from_terminal {
+                        return Ok(());
+                    }
+                }
+
+                attempts += 1;
+                if attempts % 5 == 0 {
+                    if is_from_terminal {
+                        println!("Still waiting for permissions... (attempt {})", attempts);
+                    } else {
+                        eprintln!("Still waiting for Accessibility permission...");
+                    }
+                }
+
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+    }
 }
 
 fn handle_command(cmd: Commands, window_manager: &WindowManager) -> Result<()> {

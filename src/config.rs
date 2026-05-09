@@ -693,6 +693,16 @@ mod tests {
         assert!(!plist.contains("<string>--headless</string>"));
         assert!(plist.contains("<string>com.pixie</string>"));
     }
+
+    #[test]
+    fn launch_agent_plist_uses_launchservices_for_app_bundle() {
+        let plist =
+            render_launch_agent_plist(Path::new("/Applications/Pixie.app/Contents/MacOS/pixie"));
+        assert!(plist.contains("<string>/usr/bin/open</string>"));
+        assert!(plist.contains("<string>-a</string>"));
+        assert!(plist.contains("<string>/Applications/Pixie.app</string>"));
+        assert!(!plist.contains("<string>/Applications/Pixie.app/Contents/MacOS/pixie</string>"));
+    }
 }
 
 fn launch_agent_path() -> PathBuf {
@@ -715,7 +725,11 @@ fn xml_escape(input: &str) -> String {
 }
 
 fn render_launch_agent_plist(executable: &Path) -> String {
-    let executable = xml_escape(&executable.display().to_string());
+    let program_arguments = launch_agent_program_arguments(executable)
+        .into_iter()
+        .map(|argument| format!("        <string>{}</string>", xml_escape(&argument)))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -726,7 +740,7 @@ fn render_launch_agent_plist(executable: &Path) -> String {
     <string>{LAUNCH_AGENT_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{executable}</string>
+{program_arguments}
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -736,6 +750,30 @@ fn render_launch_agent_plist(executable: &Path) -> String {
 </plist>
 "#
     )
+}
+
+fn launch_agent_program_arguments(executable: &Path) -> Vec<String> {
+    let components = executable
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+
+    if let Some(app_index) = components
+        .iter()
+        .position(|component| component.ends_with(".app"))
+    {
+        let mut app_path = PathBuf::new();
+        for component in &components[..=app_index] {
+            app_path.push(component);
+        }
+        return vec![
+            "/usr/bin/open".to_string(),
+            "-a".to_string(),
+            app_path.display().to_string(),
+        ];
+    }
+
+    vec![executable.display().to_string()]
 }
 
 fn launchctl_domain_target() -> String {
