@@ -155,7 +155,15 @@ fn ensure_accessibility_permissions(is_from_terminal: bool) -> Result<()> {
                         .spawn();
 
                     if !is_from_terminal {
-                        return Ok(());
+                        // Exit cleanly so the single-instance lock is released.
+                        // Pixie only reads the Accessibility grant at startup, so
+                        // the user must relaunch after granting it. Staying alive
+                        // here would hold the lock and make every relaunch a
+                        // silent no-op.
+                        eprintln!(
+                            "Grant Accessibility permission, then relaunch Pixie."
+                        );
+                        std::process::exit(0);
                     }
                 }
 
@@ -479,8 +487,11 @@ fn run_daemon(window_manager: Arc<WindowManager>, headless: bool) -> Result<()> 
                 eprintln!("\n❌ Failed to create event tap:\n{}\n", e);
                 eprintln!("Pixie needs Accessibility permissions to monitor keyboard events.");
                 eprintln!("Please grant permissions and restart Pixie.");
-                let _ = ui_sender.send(UiAction::Quit);
-                return;
+                // Exit directly rather than sending UiAction::Quit: this runs
+                // before the ui_receiver consumer is spawned below, so a Quit
+                // message would never be read and gpui's run loop would spin
+                // forever, holding the single-instance lock as a zombie.
+                std::process::exit(1);
             }
             let mut event_tap = event_tap.unwrap();
 
