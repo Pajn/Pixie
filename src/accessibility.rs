@@ -1170,8 +1170,66 @@ pub fn set_window_rect(
     width: f64,
     height: f64,
 ) -> Result<(), PixieError> {
+    let current_rect = get_window_rect(element).ok();
+    let is_resizing = current_rect
+        .as_ref()
+        .map(|rect| {
+            (rect.width - width).abs() > WINDOW_FRAME_EPSILON
+                || (rect.height - height).abs() > WINDOW_FRAME_EPSILON
+        })
+        .unwrap_or(true);
+
+    if !is_resizing {
+        // Pure move: position only.
+        return set_window_position(element, x, y);
+    }
+
+    // Tiling-WM standard sequence: move to the target origin first so the app
+    // has room to grow, then size, then re-assert position in case the resize
+    // nudged the window. Setting size while the window is still at its old
+    // origin lets the app/WindowServer clamp height to fit below that origin.
+    set_window_position(element, x, y)?;
+    set_window_size(element, width, height)?;
+    std::thread::sleep(WINDOW_RESIZE_SETTLE_DELAY);
+    set_window_position(element, x, y)?;
+
+    for _ in 0..WINDOW_FRAME_SETTLE_ATTEMPTS {
+        std::thread::sleep(WINDOW_FRAME_SETTLE_DELAY);
+
+        let Ok(rect) = get_window_rect(element) else {
+            continue;
+        };
+
+        let position_settled = (rect.x - x).abs() <= WINDOW_FRAME_EPSILON
+            && (rect.y - y).abs() <= WINDOW_FRAME_EPSILON;
+        let size_settled = (rect.width - width).abs() <= WINDOW_FRAME_EPSILON
+            && (rect.height - height).abs() <= WINDOW_FRAME_EPSILON;
+
+        if position_settled && size_settled {
+            break;
+        }
+
+        if !size_settled {
+            set_window_size(element, width, height)?;
+            std::thread::sleep(WINDOW_RESIZE_SETTLE_DELAY);
+        }
+
+        // Always re-assert position after a resize attempt: many apps recenter
+        // or shift the window when their size changes.
+        set_window_position(element, x, y)?;
+    }
+
+    Ok(())
+}
+
+const WINDOW_FRAME_EPSILON: f64 = 1.0;
+const WINDOW_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(50);
+const WINDOW_FRAME_SETTLE_DELAY: Duration = Duration::from_millis(40);
+const WINDOW_FRAME_SETTLE_ATTEMPTS: usize = 4;
+
+fn set_window_position(element: &AXUIElement, x: f64, y: f64) -> Result<(), PixieError> {
     use accessibility_sys::AXValueCreate;
-    use core_graphics::geometry::{CGPoint, CGSize};
+    use core_graphics::geometry::CGPoint;
 
     unsafe {
         let position = CGPoint::new(x, y);
@@ -1200,7 +1258,16 @@ pub fn set_window_rect(
                 result
             )));
         }
+    }
 
+    Ok(())
+}
+
+fn set_window_size(element: &AXUIElement, width: f64, height: f64) -> Result<(), PixieError> {
+    use accessibility_sys::AXValueCreate;
+    use core_graphics::geometry::CGSize;
+
+    unsafe {
         let size = CGSize::new(width, height);
         let size_value = AXValueCreate(
             accessibility_sys::kAXValueTypeCGSize,
